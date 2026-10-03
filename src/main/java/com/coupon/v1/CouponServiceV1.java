@@ -1,9 +1,11 @@
 package com.coupon.v1;
 
 import com.coupon.common.CouponIssuer;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 // v1: 싱글톤 빈의 필드(공유 상태)로 재고 관리 - 동기화 없음
+@Slf4j
 @Service
 public class CouponServiceV1 implements CouponIssuer {
 

@@ -2,11 +2,13 @@ package com.coupon.v2;
 
 import com.coupon.common.CouponIssuer;
 import lombok.Synchronized;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
 // v2: v1 복사본 - Atomic, synchronized 실험용
+@Slf4j
 @Service
 public class CouponServiceV2 implements CouponIssuer {
 
