@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title th:text="|쿠폰 발급 ${version}|">쿠폰 발급</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f3f4f6;
+            font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+            color: #111827;
+        }
+        .card {
+            width: 360px;
+            padding: 32px;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            text-align: center;
+        }
+        h1 { margin: 0 0 4px; font-size: 24px; }
+        .version { margin: 0 0 24px; font-size: 14px; color: #6b7280; }
+        .back { display: block; margin-bottom: 12px; text-align: left; font-size: 13px; color: #6b7280; text-decoration: none; }
+        .back:hover { color: #111827; }
+        .stats { display: flex; gap: 12px; margin-bottom: 16px; }
+        .stat { flex: 1; padding: 16px; background: #f9fafb; border-radius: 12px; }
+        .stat .label { font-size: 13px; color: #6b7280; }
+        .stat .value { margin-top: 4px; font-size: 28px; font-weight: 700; }
+        .bar { height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 20px; }
+        .bar > div { height: 100%; background: #6366f1; }
+        .message { margin-bottom: 16px; padding: 10px; border-radius: 8px; background: #eef2ff; color: #4338ca; font-size: 14px; }
+        form { margin: 0; }
+        button { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
+        .btn-issue { background: #6366f1; color: #fff; }
+        .btn-issue:hover { background: #4f46e5; }
+        .btn-issue:disabled { background: #d1d5db; cursor: not-allowed; }
+        .btn-bulk { margin-top: 8px; background: #111827; color: #fff; }
+        .btn-bulk:hover { background: #374151; }
+        .result { margin-bottom: 16px; padding: 12px; border-radius: 8px; background: #f9fafb; font-size: 14px; text-align: left; line-height: 1.7; }
+        .result.broken { background: #fef2f2; color: #b91c1c; }
+        .btn-reset { margin-top: 8px; background: transparent; color: #6b7280; font-size: 14px; font-weight: 400; }
+        .btn-reset:hover { color: #111827; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <a class="back" th:href="@{/}">← 버전 목록</a>
+    <h1>🎟️ 선착순 쿠폰 발급</h1>
+    <p class="version"><b th:text="${version}">v1</b> · <span th:text="${description}"></span></p>
+
+    <div class="stats">
+        <div class="stat">
+            <div class="label">남은 재고</div>
+            <div class="value" th:text="${stock}">0</div>
+        </div>
+        <div class="stat">
+            <div class="label">발급 수</div>
+            <div class="value" th:text="${issuedCount}">0</div>
+        </div>
+    </div>
+
+    <div class="bar">
+        <div th:style="'width:' + ${stockPercent} + '%'"></div>
+    </div>
+
+    <div class="message" th:if="${message}" th:text="${message}"></div>
+
+    <div class="result" th:if="${bulkResult}"
+         th:classappend="${issuedCount > initialStock or stock < 0} ? 'broken'">
+        <div>요청 <b th:text="${bulkResult.requestCount}">0</b>건 · 성공 <b th:text="${bulkResult.successCount}">0</b>건 · <span th:text="${bulkResult.elapsedMs}">0</span>ms</div>
+        <div th:if="${issuedCount > initialStock or stock < 0}">⚠️ 초과 발급 발생! (재고 <span th:text="${initialStock}"></span>개 기준)</div>
+    </div>
+
+    <form th:action="@{/{v}/issue(v=${version})}" method="post">
+        <button class="btn-issue" type="submit" th:disabled="${stock <= 0}">쿠폰 발급</button>
+    </form>
+    <form th:action="@{/{v}/issue-bulk(v=${version})}" method="post">
+        <button class="btn-bulk" type="submit">전체 발급 (동시 1만 요청)</button>
+    </form>
+    <form th:action="@{/{v}/reset(v=${version})}" method="post">
+        <button class="btn-reset" type="submit">재고 초기화</button>
+    </form>
+</div>
+</body>
+</html>
