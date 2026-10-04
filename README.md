@@ -37,6 +37,7 @@
 | v2-1 | `AtomicInteger` | 약 -490 | - | - | - | ❌ 초과 발급 |
 | v2-2 | `synchronized` 메서드 전체 | 0 | 100 | 100 | 약 100초 | ✅ 정확, 매우 느림 |
 | v2-3 | `synchronized` 확인+차감만 | 0 | 100 | 100 | 1,006ms | ✅ 정확, 빠름 |
+| v3 | CAS (`compareAndSet`, 락 없음) | 0 | 100 | 100 | 약 1초 (v2-3과 비슷) | ✅ 정확, 빠름 |
 
 ### v1. 동기화 없음
 
@@ -82,14 +83,43 @@ public boolean publish() {
 - 확인 → 차감(재고 예약) → 발급 처리 순서로 바꿔 느린 작업을 락 밖으로 분리
 - 락 점유 시간이 마이크로초 수준 → 성공 100건의 발급 처리가 병렬 진행
 - **약 100초 → 1초**로 단축
+- 락 밖에서 동시에 증가하는 `issuedCount`는 다시 `AtomicInteger`가 필요 (락 안에서만 바뀌는 `stock`은 `volatile int`로도 충분)
 - 남은 과제: 락 밖 발급 처리가 실패하면 예약한 재고를 되돌리는 보상 처리 필요
+
+> 동시성 검증은 실행 순서가 아니라 결과로 합니다. 스레드 실행 순서는 매번 달라지지만, 재고 ≥ 0 · 성공 수 = 발급 수 = 100이 항상 지켜져야 합니다.
+
+### v3. CAS (lock-free)
+
+```java
+private boolean stockDecrease() {
+    while (true) {
+        int current = stock.get();
+        if (current > 0) {
+            if (stock.compareAndSet(current, current - 1)) {
+                return true;   // 내가 읽은 값 그대로일 때만 차감 성공
+            }
+            // 실패: 다른 스레드가 먼저 변경 → 다시 읽고 재시도
+        } else {
+            return false;      // 재고 없음
+        }
+    }
+}
+```
+
+- 락 없이 "읽은 값이 그대로일 때만 교체, 아니면 재시도"로 확인과 차감 사이 끼어들기를 감지
+- 대기(블로킹) 없이 겹친 스레드만 재시도 → 락을 쥔 스레드가 멈춰도 다른 스레드는 진행
+- **처리 시간은 v2-3과 비슷** (sleep을 빼도 비슷)
+  - 락 범위를 이미 최소화해서 확인+차감 비용이 둘 다 매우 짧음 → 시뮬레이터 자체 비용에 묻힘
+  - 성능을 가른 것은 동기화 방식이 아니라 **락 범위** (v2-2 → v2-3)
+- 선택 기준은 성능보다 용도: CAS는 변수 1개만 보호, 여러 값을 함께 바꾸는 로직은 synchronized가 적합
+- 공통 한계: synchronized와 CAS 모두 JVM 1개 안에서만 유효 → 다중 서버에선 깨짐
 
 ## 로드맵
 
 - [x] v1: 동기화 없이 문제 재현
 - [x] v2: Atomic, synchronized 비교 및 락 범위 최소화
-- [ ] v2-4: 락 없이 CAS(`compareAndSet`) / `decrementAndGet()` 반환값으로 해결
-- [ ] v3: 다중 서버 환경에서 synchronized 한계 확인 → 분산 락 (DB 락, Redis)
+- [x] v3: 락 없이 CAS(`compareAndSet`)로 해결
+- [ ] v4: 다중 서버 환경에서 synchronized / CAS 한계 확인 → 분산 락 (DB 락, Redis)
 - [ ] 이후: 메시지 큐 기반 비동기 발급, 방식별 처리량(TPS) 비교
 
 ## 실행 방법
