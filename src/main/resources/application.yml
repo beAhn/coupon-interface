@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: coupon-interface
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
+    username: coupon
+    password: coupon
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
