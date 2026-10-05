@@ -9,7 +9,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.util.concurrent.atomic.AtomicInteger;
 
 // v4: v3 복사본 - 멀티 서버(DB 없음) 실험용
 @Slf4j

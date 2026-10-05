@@ -9,7 +9,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 @RequestMapping("/v4")
 public class CouponControllerV4 extends CouponController {
 
-    public CouponControllerV4(CouponServiceV4 couponService, BulkIssueSimulator bulkIssueSimulator) {
+    //v4-1
+//    public CouponControllerV4(CouponServiceV4 couponService, BulkIssueSimulator bulkIssueSimulator) {
+//        super(couponService, bulkIssueSimulator);
+//    }
+
+    //v4-2: 프록시 패턴을 적용하여, synchronized가 정상 동작하도록 처리
+    public CouponControllerV4(ProxyCouponServiceV4 couponService, BulkIssueSimulator bulkIssueSimulator) {
         super(couponService, bulkIssueSimulator);
     }
 }
