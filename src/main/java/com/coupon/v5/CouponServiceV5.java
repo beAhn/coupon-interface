@@ -1,4 +1,4 @@
-package com.coupon.v4;
+package com.coupon.v5;
 
 import com.coupon.common.CouponIssuer;
 import com.coupon.domain.entity.CouponPublishLog;
@@ -10,29 +10,29 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// v4: v3 복사본 - 멀티 서버(DB 없음) 실험용
+// v5: v4 복사본 - DB 락 실험용 (JVM 락 없음)
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CouponServiceV4 implements CouponIssuer {
+public class CouponServiceV5 implements CouponIssuer {
     private final CouponStockRepository couponStockRepository;
     private final CouponPublishLogRepository couponPublishLogRepository;
 
     @Override
     public String version() {
-        return "v4";
+        return "v5";
     }
 
     @Override
     public String description() {
-        return "DB연동(JPA)";
+        return "DB 락";
     }
 
     @Transactional
     @Override
     public boolean publish() {
         //재고 조회
-        CouponStock couponStock = couponStockRepository.findById(1L).orElseThrow();
+        CouponStock couponStock = couponStockRepository.findByIdForUpdate(1L);
         boolean isDecreaseSuccess = couponStock.decrease();
 
         if (isDecreaseSuccess) {

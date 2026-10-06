@@ -1,4 +1,4 @@
-package com.coupon.v4.entity;
+package com.coupon.domain.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.EntityListeners;

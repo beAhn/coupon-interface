@@ -16,7 +16,7 @@ public class ProxyCouponServiceV4 implements CouponIssuer {
 
     @Override
     public String description() {
-        return couponServiceV4.description();
+        return "DB연동(JPA / Synchronized + 프록시 패턴)";
     }
 
     @Override

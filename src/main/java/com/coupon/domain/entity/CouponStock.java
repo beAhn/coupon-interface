@@ -1,4 +1,4 @@
-package com.coupon.v4.entity;
+package com.coupon.domain.entity;
 
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -6,7 +6,6 @@ import lombok.Getter;
 @Getter
 @Entity
 public class CouponStock extends BaseEntity {
-
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
