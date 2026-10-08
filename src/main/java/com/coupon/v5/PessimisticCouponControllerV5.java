@@ -6,10 +6,10 @@ import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestMapping;
 
 @Controller
-@RequestMapping("/v5")
-public class CouponControllerV5 extends CouponController {
+@RequestMapping("/v5-1")
+public class PessimisticCouponControllerV5 extends CouponController {
 
-    public CouponControllerV5(CouponServiceV5 couponService, BulkIssueSimulator bulkIssueSimulator) {
+    public PessimisticCouponControllerV5(PessimisticCouponServiceV5 couponService, BulkIssueSimulator bulkIssueSimulator) {
         super(couponService, bulkIssueSimulator);
     }
 }

@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 @Component
 public class BulkIssueSimulator {
-    public static final int REQUEST_COUNT = 10_000;
+    public static final int REQUEST_COUNT = 10_000; // 임시: 낙관적 락 재시도 없음 실험용 (원래 10_000)
     private static final int THREAD_COUNT = 500;
 
     public Result run(CouponIssuer issuer) throws InterruptedException {

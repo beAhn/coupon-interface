@@ -10,29 +10,30 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-// v5: v4 복사본 - DB 락 실험용 (JVM 락 없음)
+// v5-2: 낙관적 락 (@Version)
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class CouponServiceV5 implements CouponIssuer {
+public class OptimisticCouponServiceV5 implements CouponIssuer {
     private final CouponStockRepository couponStockRepository;
     private final CouponPublishLogRepository couponPublishLogRepository;
 
     @Override
     public String version() {
-        return "v5";
+        return "v5-2";
     }
 
     @Override
     public String description() {
-        return "DB 락";
+        return "DB 낙관적 락";
     }
 
     @Transactional
     @Override
     public boolean publish() {
         //재고 조회
-        CouponStock couponStock = couponStockRepository.findByIdForUpdate(1L);
+        //낙관적 락(v5-2)인 상태에서는 version값을 가져옴
+        CouponStock couponStock = couponStockRepository.findById(1L).orElseThrow();
         boolean isDecreaseSuccess = couponStock.decrease();
 
         if (isDecreaseSuccess) {
