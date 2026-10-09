@@ -17,7 +17,8 @@
 - Thymeleaf (발급 테스트 화면)
 - v1~v3: DB 없이 메모리 필드로 재고 관리
 - v4~: Spring Data JPA (Hibernate 7), MySQL 8.0 (Docker Compose), HikariCP
-- 예정: Redis (분산 락), nginx + k6 (다중 서버 부하 테스트), 메시지 큐
+- v6~: Docker 앱 컨테이너 2대, nginx 1.27 (L4 `stream` 로드밸런서), k6
+- 예정: Redis (분산 락), 메시지 큐
 
 ## 테스트 환경
 
@@ -46,6 +47,8 @@
 | v5-1 | 비관적 락 (`SELECT ... FOR UPDATE`) | 0 | 100 | - | 16~20초 | ✅ 정확, 서버 간 공유 |
 | v5-2 | 낙관적 락 (`@Version`), 재시도 없음 | 0 | 100 | - | 5.1초 | ⚠️ 요청 1만 건에선 정상처럼 보임 |
 | v5-2 | 위와 동일, **요청 200건** | **70** | **30** | - | - | ❌ 재고가 남았는데 85% 충돌 실패 |
+| v6 | v4-2를 **서버 2대**로 (`@Version` 있음) | 0 | 100 | - | - | ⚠️ synchronized는 깨졌지만 version 충돌로 롤백 |
+| v6 | v4-2를 **서버 2대**로 (`@Version` 제거) | 0 | **158** | - | - | ❌ 서버마다 락이 따로라 초과 발급 |
 
 > v4~ 결과는 재고가 아니라 **발급 로그 수**로 판단합니다. lost update가 나도 재고는 0으로 끝나기 때문입니다.
 
@@ -213,6 +216,41 @@ WHERE id = 1 AND version = 7;   -- 0 rows면 ObjectOptimisticLockingFailureExcep
 | 충돌 시 | 대기 | 예외 → 실패 또는 재시도 |
 | 품절 이후 | 락 대기 후 확인 | 락 없이 즉시 반환 |
 
+### v6. 다중 서버 (서버 2대 + L4 로드밸런서)
+
+```
+k6 / curl → nginx :80 (L4, stream 라운드로빈)
+              ├→ app1 :8080 ─┐
+              └→ app2 :8080 ─┴→ MySQL (공유 재고)
+```
+
+- 같은 이미지(`coupon-app`)로 컨테이너 2대, 환경변수 `SERVER_NAME`만 다르게
+- nginx `stream` 모듈로 **TCP 연결 단위** 분산. 요청 단위 확인은 API 응답의 `serverName`으로
+  - L4는 TCP 연결이 맺어질 때(HTTP 데이터 도착 전) 서버를 고름 → 같은 연결의 요청은 계속 같은 서버
+- 발급 API: `POST /{v}/api/issue` → `{"isSuccess": true, "serverName": "app1", ...}` (200 성공 / 409 품절 / 500 충돌 예외)
+
+**v4-2(synchronized)를 서버 2대로**
+
+```
+app1 (락 A)                    app2 (락 B)   ← 서로의 락을 모름
+SELECT stock → 50              SELECT stock → 50
+decrease() → 49                decrease() → 49
+INSERT 로그                     INSERT 로그
+UPDATE = 49, commit            UPDATE = 49, commit   → 발급 2건, 재고 1 감소
+```
+
+- `@Version` 제거 시 **158건** → 재고 값 100개 중 58개를 두 서버가 겹쳐 읽음 (서버마다 1개씩, 동시 최대 2 → 이론상 최대 200)
+- `@Version`이 있으면 100건 → 늦게 커밋한 쪽이 `WHERE version = ?`에서 0 rows → 예외·롤백. DB에 있는 값으로 막는 락은 서버 간 공유됨
+- 결론: **JVM 락은 JVM 수만큼 쪼개진다.** 기준은 물리 서버 대수가 아니라 JVM 프로세스 수
+
+| 구성 | 동시 트랜잭션 | 발급 |
+|---|---|---|
+| v4-1 락 없음 (서버 1대, 풀 10) | 최대 10 | 202 |
+| v4-2 서버 1대 | 1 | 100 |
+| v4-2 서버 2대 | 최대 2 | 158 |
+
+> 이 실험은 각 서버의 시뮬레이터를 동시에 실행(총 2만 건)해 **정확성만** 확인했습니다. 처리 시간 비교는 k6로 별도 측정 예정입니다.
+
 ## 로드맵
 
 - [x] v1: 동기화 없이 문제 재현
@@ -223,13 +261,16 @@ WHERE id = 1 AND version = 7;   -- 0 rows면 ObjectOptimisticLockingFailureExcep
 - [x] v5-2: DB 낙관적 락 (재시도 없음)
 - [ ] v5-2: 낙관적 락 재시도, v5-1 품절 빠른 반환
 - [ ] v5-3: 조건부 UPDATE (`SET stock = stock - 1 WHERE stock > 0`)
-- [ ] v6: 서버 2대(nginx L7 + k6)로 JVM 락 한계 재현 → Redis 분산 락
+- [x] v6: 서버 2대(Docker) + nginx L4 구성, v4-2 초과 발급 재현 (158건)
+- [ ] v6: v5-1 서버 2대 확인, k6 측정, Redis 분산 락
 - [ ] v7: 메시지 큐 기반 비동기 발급
 
 ## 실행 방법
 
+**서버 1대 (IntelliJ 또는 Maven)**
+
 ```bash
-docker compose up -d     # MySQL (v4~)
+docker compose up -d mysql     # MySQL (v4~)
 ./mvnw spring-boot:run
 ```
 
@@ -239,4 +280,29 @@ docker compose up -d     # MySQL (v4~)
 
 ```sql
 ALTER TABLE coupon_stock ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
+```
+
+**서버 2대 (v6)**
+
+```bash
+./mvnw package -Dmaven.test.skip=true    # JDK 21 필요
+docker compose up -d --build              # mysql + app1 + app2 + nginx
+docker compose restart nginx              # 앱 컨테이너를 다시 만든 경우 (nginx는 시작 시에만 IP 조회)
+```
+
+| 주소 | 대상 |
+|---|---|
+| `http://localhost` | nginx → app1 / app2 분산 |
+| `http://localhost:8081` | app1 직접 |
+| `http://localhost:8082` | app2 직접 |
+
+```bash
+# 발급 API (nginx 경유)
+curl -X POST http://localhost/v5-1/api/issue
+
+# 두 서버 시뮬레이터 동시 실행 (정확성 확인용)
+curl -s -X POST http://localhost:8081/v4/reset -o /dev/null
+curl -s -X POST http://localhost:8081/v4/issue-bulk -o /dev/null &
+curl -s -X POST http://localhost:8082/v4/issue-bulk -o /dev/null &
+wait
 ```

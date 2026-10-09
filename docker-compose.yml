@@ -22,5 +22,47 @@ services:
       timeout: 3s
       retries: 10
 
+  # v6: 앱 서버 2대 (같은 이미지, SERVER_NAME만 다름)
+  app1:
+    build: .
+    image: coupon-app
+    container_name: coupon-app1
+    ports:
+      - "8081:8080"   # 디버깅용 직접 접근
+    environment:
+      SERVER_NAME: app1
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
+      TZ: Asia/Seoul
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  app2:
+    image: coupon-app
+    container_name: coupon-app2
+    ports:
+      - "8082:8080"
+    environment:
+      SERVER_NAME: app2
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
+      TZ: Asia/Seoul
+    depends_on:
+      mysql:
+        condition: service_healthy
+      app1:
+        condition: service_started   # app1이 이미지를 빌드한 뒤 시작
+
+  # v6: L4 로드밸런서
+  nginx:
+    image: nginx:1.27
+    container_name: coupon-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app1
+      - app2
+
 volumes:
   mysql-data:

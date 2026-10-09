@@ -1,15 +1,23 @@
 package com.coupon.common;
 
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 // 버전별 컨트롤러 공통 동작 - 하위 클래스에서 @RequestMapping("/vN") 지정
+@Slf4j
 public abstract class CouponController {
 
     private final CouponIssuer issuer;
     private final BulkIssueSimulator bulkIssueSimulator;
+
+    @Value("${SERVER_NAME:local}")
+    private String serverName;
 
     protected CouponController(CouponIssuer issuer, BulkIssueSimulator bulkIssueSimulator) {
         this.issuer = issuer;
@@ -49,4 +57,24 @@ public abstract class CouponController {
     private String redirectToPage() {
         return "redirect:/" + issuer.version();
     }
+
+    @PostMapping("/api/issue")
+    @ResponseBody
+    public IssueResponse publishForMultiServer(HttpServletResponse response) {
+        boolean issued = issuer.publish();
+
+        if (issued) {
+            response.setStatus(HttpServletResponse.SC_OK);
+            log.debug("발급 성공");
+
+            return new IssueResponse(true,  serverName, "success");
+        } else {
+            response.setStatus(HttpServletResponse.SC_CONFLICT); //발급 실패
+            log.debug("발급 실패");
+
+            return new IssueResponse(false, serverName, "error");
+        }
+    }
+
+    public record IssueResponse(boolean isSuccess, String serverName, String message) {}
 }
