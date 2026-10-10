@@ -1,0 +1,3 @@
+# 빌드 컨텍스트에서 jar 외 제외
+*
+!target/coupon-interface-*.jar
