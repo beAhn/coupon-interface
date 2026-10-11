@@ -1,4 +1,4 @@
-# v6: 앱 이미지 (로컬에서 빌드한 jar 복사)
+# 다중 서버 테스트: 앱 이미지 (로컬에서 빌드한 jar 복사)
 # 빌드: ./mvnw package -Dmaven.test.skip=true
 FROM eclipse-temurin:21-jre
 

@@ -17,7 +17,7 @@
 - Thymeleaf (발급 테스트 화면)
 - v1~v3: DB 없이 메모리 필드로 재고 관리
 - v4~: Spring Data JPA (Hibernate 7), MySQL 8.0 (Docker Compose), HikariCP
-- v6~: Docker 앱 컨테이너 2대, nginx 1.27 (L4 `stream` 로드밸런서), k6
+- 다중 서버 테스트: Docker 앱 컨테이너 2대, nginx 1.27 (L4 `stream` 로드밸런서), k6
 - 예정: Redis (분산 락), 메시지 큐
 
 ## 테스트 환경
@@ -47,8 +47,12 @@
 | v5-1 | 비관적 락 (`SELECT ... FOR UPDATE`) | 0 | 100 | - | 16~20초 | ✅ 정확, 서버 간 공유 |
 | v5-2 | 낙관적 락 (`@Version`), 재시도 없음 | 0 | 100 | - | 5.1초 | ⚠️ 요청 1만 건에선 정상처럼 보임 |
 | v5-2 | 위와 동일, **요청 200건** | **70** | **30** | - | - | ❌ 재고가 남았는데 85% 충돌 실패 |
-| v6 | v4-2를 **서버 2대**로 (`@Version` 있음) | 0 | 100 | - | - | ⚠️ synchronized는 깨졌지만 version 충돌로 롤백 |
-| v6 | v4-2를 **서버 2대**로 (`@Version` 제거) | 0 | **158** | - | - | ❌ 서버마다 락이 따로라 초과 발급 |
+| v4-2 (서버 2대) | 시뮬레이터 동시 실행, `@Version` 있음 | 0 | 100 | - | - | ⚠️ synchronized는 깨졌지만 version 충돌로 롤백 |
+| v4-2 (서버 2대) | 시뮬레이터 동시 실행, `@Version` 제거 | 0 | **158** | - | - | ❌ 서버마다 락이 따로라 초과 발급 |
+| v4-2 (서버 2대) | k6 1만 건 → nginx | 0 | **173** | 173 | 8.2초 | ❌ 초과 발급 + 데드락 22건 |
+| v5-1 (서버 2대) | k6 1만 건 → nginx | 0 | 100 | 100 | 4.0~7.3초 | ✅ DB 행 락은 서버 간 공유 |
+| v5-2 (서버 2대) | k6 1만 건 → nginx, 재시도 없음 | 0 | 100 | 100 | - | ⚠️ 정확하지만 롤백 1,401건 (데드락 1,302 + version 충돌 99) |
+| (참고) v5-2에서 `@Version` 미적용 | 락 없는 JPA를 서버 2대로 | 0 | **199** | - | - | ❌ 동시 최대 20 트랜잭션이 겹쳐 읽음 |
 
 > v4~ 결과는 재고가 아니라 **발급 로그 수**로 판단합니다. lost update가 나도 재고는 0으로 끝나기 때문입니다.
 
@@ -173,7 +177,7 @@ ProxyCouponServiceV4.publish()  ← synchronized: 락 획득
 ```
 
 - 100건 정확, 하지만 **24~36초**: 트랜잭션 전체가 한 줄로 직렬화. 품절 후 9,900건도 줄을 섬
-- `synchronized`는 JVM 1개 안에서만 유효 → 다중 서버에선 깨짐 (v6)
+- `synchronized`는 JVM 1개 안에서만 유효 → 다중 서버에선 깨짐 (아래 다중 서버 테스트)
 
 ### v5-1. 비관적 락 (SELECT ... FOR UPDATE)
 
@@ -216,7 +220,9 @@ WHERE id = 1 AND version = 7;   -- 0 rows면 ObjectOptimisticLockingFailureExcep
 | 충돌 시 | 대기 | 예외 → 실패 또는 재시도 |
 | 품절 이후 | 락 대기 후 확인 | 락 없이 즉시 반환 |
 
-### v6. 다중 서버 (서버 2대 + L4 로드밸런서)
+### 다중 서버 테스트 (서버 2대 + L4 로드밸런서)
+
+> 동시성 제어 방식이 아니라 **테스트 환경**이라 버전 번호 없이, 기존 v4-2·v5-1을 그대로 서버 2대에서 검증합니다.
 
 ```
 k6 / curl → nginx :80 (L4, stream 라운드로빈)
@@ -249,7 +255,54 @@ UPDATE = 49, commit            UPDATE = 49, commit   → 발급 2건, 재고 1 �
 | v4-2 서버 1대 | 1 | 100 |
 | v4-2 서버 2대 | 최대 2 | 158 |
 
-> 이 실험은 각 서버의 시뮬레이터를 동시에 실행(총 2만 건)해 **정확성만** 확인했습니다. 처리 시간 비교는 k6로 별도 측정 예정입니다.
+> 위 158건은 각 서버의 시뮬레이터를 동시에 실행(총 2만 건)해 정확성만 확인한 결과입니다.
+
+**k6로 측정 (1만 건 → nginx → app1/app2)**
+
+| | v4-2 (synchronized) | v5-1 (비관적 락) | v5-2 (낙관적 락, 재시도 없음) |
+|---|---|---|---|
+| 발급 | 173 | 100 | 100 |
+| 품절 (409) | 9,805 | 9,900 | 8,499 |
+| 오류 (500) | 22 (데드락) | 0 | 1,401 (데드락 1,302 + version 충돌 99) |
+| 전체 시간 | 8.2초 | 7.3초 (워밍업 후 4.0초) | - |
+
+- 발급 수의 범위: `100 ≤ 발급 ≤ 100 × 동시에 실행될 수 있는 트랜잭션 수`. v4-2 서버 2대는 최대 2개 → 100~200 사이 (173 = 재고 값 100개 중 73개를 두 서버가 겹쳐 읽음)
+
+- v5-1은 서버 2대에서도 정확: `FOR UPDATE`의 X 락이 MySQL에 있어 두 서버가 같은 락을 공유
+- v5-1이 더 빠름: 줄은 1개(v4-2는 서버마다 1개씩 2개)지만 직렬 구간이 `FOR UPDATE ~ commit`으로 짧음
+
+**v4-2에서 나온 데드락: 외래키의 S 락**
+
+`coupon_publish_log.coupon_stock_id`는 `coupon_stock(id)`를 참조하는 외래키라, INSERT 시 InnoDB가 부모 행에 S 락을 걸고 커밋까지 유지합니다.
+
+| 순서 | app1 | app2 | `coupon_stock` id=1 |
+|---|---|---|---|
+| 1 | 발급 로그 INSERT → S 락 | | app1: S |
+| 2 | | 발급 로그 INSERT → S 락 (S끼리 호환) | app1: S, app2: S |
+| 3 | UPDATE → X 락 요청, app2의 S 때문에 대기 | | |
+| 4 | | UPDATE → X 락 요청, app1의 S 때문에 대기 | 순환 대기 → 한쪽 롤백 |
+
+- Hibernate는 IDENTITY라 `save()` 시점에 INSERT, 재고 UPDATE는 커밋 직전 flush → 항상 S(INSERT) → X(UPDATE) 순서
+- 서버 1대 v4-2는 트랜잭션이 1개씩이라 S 락이 겹칠 일이 없었음
+- v5-1은 처음부터 `FOR UPDATE`로 X 락을 잡아 발생하지 않음
+- S 락은 테이블 락이 아니라 **id=1 행(PK 인덱스 레코드) 하나**에만 걸림 (`RECORD LOCKS ... lock mode S locks rec but not gap`)
+
+**v5-2(낙관적 락)를 서버 2대로**
+
+- 일반 SELECT는 락 없이 MVCC 스냅샷으로 읽음 → 여러 트랜잭션이 같은 version으로 동시에 진행
+- 롤백 1,401건 중 **1,302건이 외래키 데드락**, version 충돌은 99건뿐 → UPDATE에서 version을 비교하기도 전에 INSERT의 S 락끼리 순환 대기
+- INSERT가 UPDATE보다 먼저 나가도 초과 발급은 없음: 같은 트랜잭션이라 UPDATE가 실패하면 INSERT도 함께 롤백 (원자성)
+- 결론: 정확성은 지키지만, 한 행에 요청이 몰리면 롤백 비용이 큼. 재시도를 넣는다면 데드락(`CannotAcquireLockException`)도 대상에 포함해야 함
+
+**k6는 Docker 네트워크 안에서 실행**
+
+Mac에서 `localhost:80`으로 보내면 VU 500개가 동시에 연결할 때 Docker Desktop 포트 포워딩 구간에서 `connection reset by peer`가 발생했습니다 (v5-1에서 350건, 앱 로그에는 예외 없음). 같은 테스트를 Docker 네트워크 안에서 실행하면 0건입니다. 그래서 k6를 compose 서비스(`profiles: ["test"]`)로 두고 `docker compose run`으로 실행합니다.
+
+**측정 시 주의**
+
+- 코드를 바꾸면 `./mvnw package` → `docker compose up -d --build` → `docker compose restart nginx`. IntelliJ 실행은 Mac의 별도 앱이라 컨테이너에 반영되지 않음
+- 같은 조건으로 3회 이상, 첫 회는 워밍업으로 제외 (v5-1이 7.3초 → 워밍업 후 4.0초)
+- k6 `http_req_failed`는 200~399 밖을 모두 실패로 셈 → 409 품절도 포함 (v5-1 정상이 99%)
 
 ## 로드맵
 
@@ -261,8 +314,9 @@ UPDATE = 49, commit            UPDATE = 49, commit   → 발급 2건, 재고 1 �
 - [x] v5-2: DB 낙관적 락 (재시도 없음)
 - [ ] v5-2: 낙관적 락 재시도, v5-1 품절 빠른 반환
 - [ ] v5-3: 조건부 UPDATE (`SET stock = stock - 1 WHERE stock > 0`)
-- [x] v6: 서버 2대(Docker) + nginx L4 구성, v4-2 초과 발급 재현 (158건)
-- [ ] v6: v5-1 서버 2대 확인, k6 측정, Redis 분산 락
+- [x] 다중 서버 테스트 환경: Docker 앱 2대 + nginx L4 + k6
+- [x] 다중 서버 테스트: v4-2 초과 발급(173건) + 외래키 데드락 재현, v5-1 100건 유지
+- [ ] v6: Redis 분산 락
 - [ ] v7: 메시지 큐 기반 비동기 발급
 
 ## 실행 방법
@@ -282,7 +336,7 @@ docker compose up -d mysql     # MySQL (v4~)
 ALTER TABLE coupon_stock ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
 ```
 
-**서버 2대 (v6)**
+**서버 2대 (다중 서버 테스트)**
 
 ```bash
 ./mvnw package -Dmaven.test.skip=true    # JDK 21 필요
@@ -305,4 +359,15 @@ curl -s -X POST http://localhost:8081/v4/reset -o /dev/null
 curl -s -X POST http://localhost:8081/v4/issue-bulk -o /dev/null &
 curl -s -X POST http://localhost:8082/v4/issue-bulk -o /dev/null &
 wait
+```
+
+```bash
+# k6 부하 테스트 (compose 네트워크 안에서 nginx로)
+curl -s -X POST http://localhost:8081/v5-1/reset -o /dev/null
+docker compose run --rm -e VERSION=v5-1 k6 run /scripts/issue.js
+
+# HTML 보고서까지 (k6/report-v5-1.html)
+docker compose run --rm -e VERSION=v5-1 \
+  -e K6_WEB_DASHBOARD_EXPORT=/scripts/report-v5-1.html \
+  k6 run /scripts/issue.js
 ```

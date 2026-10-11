@@ -22,7 +22,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # v6: 앱 서버 2대 (같은 이미지, SERVER_NAME만 다름)
+  # 다중 서버 테스트: 앱 서버 2대 (같은 이미지, SERVER_NAME만 다름)
   app1:
     build: .
     image: coupon-app
@@ -52,7 +52,7 @@ services:
       app1:
         condition: service_started   # app1이 이미지를 빌드한 뒤 시작
 
-  # v6: L4 로드밸런서
+  # 다중 서버 테스트: L4 로드밸런서
   nginx:
     image: nginx:1.27
     container_name: coupon-nginx
@@ -63,6 +63,20 @@ services:
     depends_on:
       - app1
       - app2
+
+  # 다중 서버 테스트: 부하 발생기 (같은 네트워크에서 nginx 호출, Mac 포트 포워딩 우회)
+  # 실행: docker compose run --rm -e VERSION=v5-1 k6 run /scripts/issue.js
+  k6:
+    image: grafana/k6
+    profiles: ["test"]   # up 할 때는 안 뜨고 run으로만 실행
+    volumes:
+      - ./k6:/scripts    # 스크립트, 보고서 공유
+    environment:
+      BASE_URL: http://nginx
+      K6_WEB_DASHBOARD: "true"
+      K6_WEB_DASHBOARD_PERIOD: 1s
+    depends_on:
+      - nginx
 
 volumes:
   mysql-data:
