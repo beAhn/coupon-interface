@@ -22,6 +22,18 @@ services:
       timeout: 3s
       retries: 10
 
+  # v6: 분산 락 저장소 (락은 휘발성이라 볼륨 없음)
+  redis:
+    image: redis:7.4
+    container_name: coupon-redis
+    ports:
+      - "6379:6379"   # 로컬(IDE) 실행 앱도 접근
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # 다중 서버 테스트: 앱 서버 2대 (같은 이미지, SERVER_NAME만 다름)
   app1:
     build: .
@@ -32,9 +44,12 @@ services:
     environment:
       SERVER_NAME: app1
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
+      SPRING_DATA_REDIS_HOST: redis
       TZ: Asia/Seoul
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   app2:
@@ -45,9 +60,12 @@ services:
     environment:
       SERVER_NAME: app2
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
+      SPRING_DATA_REDIS_HOST: redis
       TZ: Asia/Seoul
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       app1:
         condition: service_started   # app1이 이미지를 빌드한 뒤 시작
