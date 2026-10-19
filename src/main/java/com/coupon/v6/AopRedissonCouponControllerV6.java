@@ -5,10 +5,10 @@ import com.coupon.common.CouponController;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestMapping;
 
-@RequestMapping("/v6")
+@RequestMapping("/v6-3")
 @Controller
-public class CouponControllerV6 extends CouponController {
-    protected CouponControllerV6(RedisLockCouponServiceV6 couponService, BulkIssueSimulator bulkIssueSimulator) {
+public class AopRedissonCouponControllerV6 extends CouponController {
+    protected AopRedissonCouponControllerV6(AopRedissonLockCouponServiceV6 couponService, BulkIssueSimulator bulkIssueSimulator) {
         super(couponService, bulkIssueSimulator);
     }
 }

@@ -69,6 +69,18 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis</artifactId>
 		</dependency>
+		<!-- v6-2: Redisson 분산 락 (starter 대신 core, RedissonClient는 직접 Bean 등록) -->
+		<dependency>
+			<groupId>org.redisson</groupId>
+			<artifactId>redisson</artifactId>
+			<version>4.8.0</version>
+		</dependency>
+
+		<!-- v6-3: AOP (Spring Boot 4부터 spring-boot-starter-aop → spring-boot-starter-aspectj) -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-aspectj</artifactId>
+		</dependency>
 	</dependencies>
 
 	<build>

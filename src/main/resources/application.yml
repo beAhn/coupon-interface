@@ -16,3 +16,4 @@ spring:
     properties:
       hibernate:
         format_sql: true
+    open-in-view: false #OSIV 설정. 키면 view단까지 영속성 컨텍스트 유지

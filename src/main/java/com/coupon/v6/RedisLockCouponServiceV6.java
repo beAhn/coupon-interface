@@ -46,6 +46,11 @@ public class RedisLockCouponServiceV6 implements CouponIssuer {
     // 락 획득 → 트랜잭션(커밋까지) → 락 해제 순서라 커밋 전 해제 문제 없음
     @Override
     public boolean publish() {
+        // 품절 빠른 반환: 락 밖 확인은 거절에만 사용 (승인은 락 안 decrease()에서). 재고는 줄기만 하므로 0을 믿어도 됨
+        if (couponServiceV4.getStock() <= 0) {
+            return false;
+        }
+
         String token = UUID.randomUUID().toString();   // 요청마다 새로 생성 (필드면 모든 스레드가 같은 토큰)
         if (!acquire(token)) {
             log.warn("락 대기 시간 초과");
@@ -61,7 +66,10 @@ public class RedisLockCouponServiceV6 implements CouponIssuer {
     // SET lock:coupon:1 <token> NX PX 3000, 실패하면 잠깐 쉬고 재시도 (스핀 락)
     private boolean acquire(String token) {
         long deadline = System.currentTimeMillis() + WAIT_MILLIS;
+
+        //1분 동안 락이 해제되는지 체크 후 처리
         while (System.currentTimeMillis() < deadline) {
+            //SET NX(키가 있으면 false 반환)
             Boolean ok = redisTemplate.opsForValue().setIfAbsent(LOCK_KEY, token, LOCK_TTL);
 
             if (Boolean.TRUE.equals(ok)) {
