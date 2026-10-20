@@ -18,7 +18,8 @@
 - v1~v3: DB 없이 메모리 필드로 재고 관리
 - v4~: Spring Data JPA (Hibernate 7), MySQL 8.0 (Docker Compose), HikariCP
 - 다중 서버 테스트: Docker 앱 컨테이너 2대, nginx 1.27 (L4 `stream` 로드밸런서), k6
-- 예정: Redis (분산 락), 메시지 큐
+- v6~: Redis 7.4 (v6 분산 락: `SET NX` 스핀 락, Redisson / v7 재고 판정: `DECR`, Lua 스크립트)
+- 예정: 메시지 큐
 
 ## 테스트 환경
 
@@ -53,6 +54,13 @@
 | v5-1 (서버 2대) | k6 1만 건 → nginx | 0 | 100 | 100 | 4.0~7.3초 | ✅ DB 행 락은 서버 간 공유 |
 | v5-2 (서버 2대) | k6 1만 건 → nginx, 재시도 없음 | 0 | 100 | 100 | 7.3~8.7초 | ⚠️ 정확하지만 롤백 1,401건 (데드락 1,302 + version 충돌 99) |
 | (참고) v5-2에서 `@Version` 미적용 | 락 없는 JPA를 서버 2대로 | 0 | **199** | - | - | ❌ 동시 최대 20 트랜잭션이 겹쳐 읽음 |
+| v5-3 (서버 2대) | 조건부 UPDATE (`WHERE stock > 0`) | 0 | 100 | 100 | 약 8초 | ✅ 데드락 0 |
+| v6 (서버 2대) | Redis 분산 락 (`SET NX` 스핀 + Lua 해제) | 0 | 100 | 100 | 42.7초 | ✅ 정확, 최대 대기 36.7초 (기아) |
+| v6 + 품절 빠른 반환 (서버 2대) | 락 밖 재고 확인 → 즉시 거절 | 0 | 100 | 100 | 약 11.8초 | ✅ (OSIV 켜면 2,000건+ 초과 발급) |
+| v6-3 (서버 2대) | Redisson + AOP `@DistributedLock` | 0 | 100 | 100 | 19.6초 | ✅ 오류 0 |
+| v7-1 (서버 2대) | Redis `DECR`로 재고 판정, DB는 발급 로그 INSERT만 | Redis **-9900** | 100 | 100 | 3.7초 | ⚠️ 정확하지만 재고 음수, INSERT 실패 시 미달 발급 |
+| v7-2 (서버 2대) | Lua(재고 확인 + `DECR` + pending 등록) + 실패 보상 | Redis 0 | 100 | 100 | 2.6초 | ✅ pending 0 |
+| v7-2 + INSERT 10% 강제 실패 | 롤백 경로 검증 | Redis 0 | 100 | 100 | - | ✅ 승인 116 = 성공 100 + 롤백 16 |
 
 > v4~ 결과는 재고가 아니라 **발급 로그 수**로 판단합니다. lost update가 나도 재고는 0으로 끝나기 때문입니다.
 
@@ -305,6 +313,58 @@ Mac에서 `localhost:80`으로 보내면 VU 500개가 동시에 연결할 때 Do
 - 같은 조건으로 3회 이상, 첫 회는 워밍업으로 제외 (v5-1이 7.3초 → 워밍업 후 4.0초)
 - k6 `http_req_failed`는 200~399 밖을 모두 실패로 셈 → 409 품절도 포함 (v5-1 정상이 99%)
 
+### v7. Redis 재고 판정
+
+> v6까지 Redis는 "락"이었고 재고 판정은 DB에서 했습니다. v7은 **재고 판정 자체를 Redis 원자 연산으로** 옮기고, DB에는 발급 로그만 INSERT합니다.
+
+**v7-1. `DECR`**
+
+```java
+Long remain = redisTemplate.opsForValue().decrement("coupon:stock:1");
+if (remain >= 0) { /* 발급 로그 INSERT */ return true; }
+return false;
+```
+
+- `DECR`은 Redis 명령 1개라 락 없이도 승인이 정확히 100번
+- 재고 행 UPDATE가 없어서 v4-2·v5-2에서 본 외래키 S→X 데드락 경로 자체가 없음
+- 서버 2대 k6: 100건, 오류 0, **3.7초** (v6-3 19.6초)
+- 문제 1: 품절 요청도 `DECR` → Redis 재고 **-9900**
+- 문제 2: `DECR` 후 INSERT가 실패하면 재고만 줄고 발급은 안 됨 → **미달 발급**
+
+**v7-2. Lua 스크립트 + 실패 보상**
+
+```lua
+-- ISSUE_SCRIPT: 재고 확인 + DECR + pending 등록을 한 번에
+local stock = tonumber(redis.call('GET', KEYS[1]))
+if stock == nil or stock <= 0 then return -1 end
+local remain = redis.call('DECR', KEYS[1])
+redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])   -- coupon:pending:1 <시각> <requestId>
+return remain
+
+-- ROLLBACK_SCRIPT: pending에 있을 때만 재고 복구 (중복 보상 방지)
+if redis.call('ZREM', KEYS[2], ARGV[1]) == 1 then return redis.call('INCR', KEYS[1]) end
+return -1
+```
+
+```
+ISSUE_SCRIPT 승인 → INSERT 성공 → ZREM (pending 해제)          → 발급 확정
+                  → INSERT 실패 → ROLLBACK_SCRIPT (ZREM + INCR) → 재고 원복, 다음 요청이 가져감
+                  → 둘 다 아님 (서버 다운 등) → pending에 남음  → 결과 미확인
+```
+
+- Java에서 명령 2개를 따로 보내면 사이에 다른 요청이 끼어듦 → Lua 스크립트로 묶어 원자 실행
+- 품절이면 `DECR`하지 않아 재고가 음수로 내려가지 않음
+- 성공 후 `ZREM`은 `try` 밖에 둠. `try` 안이면 INSERT 커밋 후 `ZREM` 실패가 보상(INCR)으로 이어져 초과 발급
+- 결과: 100건, Redis 재고 0, pending 0, 2.6초
+- 롤백 검증 (INSERT 전 10% 확률 예외): 발급 100, 롤백 16 → **승인 116 = 성공 100 + 롤백 16**
+
+**남은 과제**
+
+- pending 복구: 현재 member가 요청마다 랜덤 UUID라 DB 발급 로그와 대조할 수 없음 → 발급 로그에 `userId` 저장 후 오래된 pending을 대조해 재발급·보상
+- 롤백도 품절과 같은 409로 응답 → 성공/품절/오류 구분
+- DB `coupon_stock` 재고 현행화
+- 큐 기반 비동기 저장
+
 ## 로드맵
 
 - [x] v1: 동기화 없이 문제 재현
@@ -314,11 +374,14 @@ Mac에서 `localhost:80`으로 보내면 VU 500개가 동시에 연결할 때 Do
 - [x] v5-1: DB 비관적 락
 - [x] v5-2: DB 낙관적 락 (재시도 없음)
 - [ ] v5-2: 낙관적 락 재시도, v5-1 품절 빠른 반환
-- [ ] v5-3: 조건부 UPDATE (`SET stock = stock - 1 WHERE stock > 0`)
+- [x] v5-3: 조건부 UPDATE (`SET stock = stock - 1 WHERE stock > 0`)
 - [x] 다중 서버 테스트 환경: Docker 앱 2대 + nginx L4 + k6
 - [x] 다중 서버 테스트: v4-2 초과 발급(173건) + 외래키 데드락 재현, v5-1 100건 유지
-- [ ] v6: Redis 분산 락
-- [ ] v7: 메시지 큐 기반 비동기 발급
+- [x] v6: Redis 분산 락 (직접 구현 → Redisson → AOP)
+- [x] v7-1: Redis `DECR`로 재고 판정
+- [x] v7-2: Lua 원자 처리 + INSERT 실패 보상
+- [ ] v7: pending 복구 (사용자 식별자 저장), 결과 3분류, DB 재고 현행화
+- [ ] v7-3: 메시지 큐 기반 비동기 발급
 
 ## 실행 방법
 
@@ -365,10 +428,18 @@ wait
 ```bash
 # k6 부하 테스트 (compose 네트워크 안에서 nginx로)
 curl -s -X POST http://localhost:8081/v5-1/reset -o /dev/null
-docker compose run --rm -e VERSION=v5-1 k6 run /scripts/issue.js
+docker compose run --rm --no-deps -e VERSION=v5-1 k6 run /scripts/issue.js
 
 # HTML 보고서까지 (k6/report-v5-1.html)
-docker compose run --rm -e VERSION=v5-1 \
+docker compose run --rm --no-deps -e VERSION=v5-1 \
   -e K6_WEB_DASHBOARD_EXPORT=/scripts/report-v5-1.html \
   k6 run /scripts/issue.js
+```
+
+- `--no-deps`: 없으면 k6의 `depends_on`을 따라 app/nginx 컨테이너가 다시 만들어지고, 앱이 뜨기 전에 요청이 나가 전부 실패할 수 있음
+
+```bash
+# v7 Redis 상태 확인
+docker exec coupon-redis redis-cli GET coupon:stock:1      # 남은 재고
+docker exec coupon-redis redis-cli ZCARD coupon:pending:1  # 결과 미확인 요청 수
 ```
