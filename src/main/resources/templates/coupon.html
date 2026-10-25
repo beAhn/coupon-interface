@@ -8,16 +8,14 @@
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             background: #f3f4f6;
             font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
             color: #111827;
         }
+        main { min-height: calc(100vh - 60px); display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
         .card {
-            width: 360px;
+            width: 100%;
+            max-width: 360px;
             padding: 32px;
             background: #fff;
             border-radius: 16px;
@@ -26,8 +24,6 @@
         }
         h1 { margin: 0 0 4px; font-size: 24px; }
         .version { margin: 0 0 24px; font-size: 14px; color: #6b7280; }
-        .back { display: block; margin-bottom: 12px; text-align: left; font-size: 13px; color: #6b7280; text-decoration: none; }
-        .back:hover { color: #111827; }
         .stats { display: flex; gap: 12px; margin-bottom: 16px; }
         .stat { flex: 1; padding: 16px; background: #f9fafb; border-radius: 12px; }
         .stat .label { font-size: 13px; color: #6b7280; }
@@ -49,8 +45,9 @@
     </style>
 </head>
 <body>
+<div th:replace="~{fragments/gnb :: gnb}"></div>
+<main>
 <div class="card">
-    <a class="back" th:href="@{/}">← 버전 목록</a>
     <h1>🎟️ 선착순 쿠폰 발급</h1>
     <p class="version"><b th:text="${version}">v1</b> · <span th:text="${description}"></span></p>
 
@@ -87,5 +84,6 @@
         <button class="btn-reset" type="submit">재고 초기화</button>
     </form>
 </div>
+</main>
 </body>
 </html>

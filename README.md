@@ -404,6 +404,7 @@ return remain
 - [x] v7-2: 1인 1매 (issued Set + `SADD`), 결과 분류(성공/품절/중복/오류)
 - [ ] v7: pending 복구, DB 재고 현행화
 - [ ] v7-3: 메시지 큐 기반 비동기 발급
+- [ ] 화면에서 서버 2대 대량 발급 (nginx 경유 시뮬레이터)
 
 ## 실행 방법
 
@@ -414,8 +415,9 @@ docker compose up -d mysql     # MySQL (v4~)
 ./mvnw spring-boot:run
 ```
 
-- `http://localhost:8080` 접속 → 버전 선택
-- 각 버전 화면(`/v1`, `/v2`, `/v3`, `/v4`, `/v5-1`, `/v5-2`)에서 단건 발급, 대량 발급(1만 건), 초기화 실행
+- `http://localhost:8080` 접속 → 상단 GNB에서 버전 선택 (큰 버전 탭, 마우스오버 시 하위 버전 드롭다운, 큰 버전 클릭은 최신 하위 버전으로)
+- 각 버전 화면(`/v1` ~ `/v7-2`)에서 단건 발급, 대량 발급(1만 건, 서버 1대), 초기화 실행
+- 기동 완료 시 전 버전 자동 초기화 (DB 재고 100·발급 로그 삭제·Redis 키 정리). DB/Redis는 서버 2대 공유라 한 대만 재시작해도 초기화됨 → 끄려면 `coupon.reset-on-startup=false` (Docker: `COUPON_RESET_ON_STARTUP=false`)
 - `ddl-auto: validate`라 테이블은 직접 준비해야 함. v5-2부터 `coupon_stock.version` 컬럼 필요
 
 ```sql

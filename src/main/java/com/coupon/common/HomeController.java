@@ -1,24 +1,14 @@
 package com.coupon.common;
 
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 
-import java.util.Comparator;
-import java.util.List;
-
+// 버전 목록(issuers, gnbGroups)은 GnbAdvice가 model에 넣음
 @Controller
-@RequiredArgsConstructor
 public class HomeController {
 
-    private final List<CouponIssuer> issuers;
-
     @GetMapping("/")
-    public String home(Model model) {
-        model.addAttribute("issuers", issuers.stream()
-                .sorted(Comparator.comparing(CouponIssuer::version))
-                .toList());
+    public String home() {
         return "home";
     }
 }
