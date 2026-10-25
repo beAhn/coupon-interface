@@ -21,6 +21,12 @@ public class CouponPublishLog extends BaseEntity {
         this.couponStock = couponStock;
     }
 
+    // v7-2 1인 1매용
+    public CouponPublishLog (CouponStock couponStock, String userId) {
+        this(couponStock);
+        this.userId = userId;
+    }
+
     // CPN-yyyyMMdd-UUID앞23자리 (총 36자, 컬럼 길이에 맞춤)
     private static String generateCouponNo() {
         String date = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
@@ -41,5 +47,4 @@ public class CouponPublishLog extends BaseEntity {
 
     @Column(length = 50)
     private String userId; // 선택 (1인 1매 실험용)
-
 }

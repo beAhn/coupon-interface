@@ -58,9 +58,10 @@
 | v6 (서버 2대) | Redis 분산 락 (`SET NX` 스핀 + Lua 해제) | 0 | 100 | 100 | 42.7초 | ✅ 정확, 최대 대기 36.7초 (기아) |
 | v6 + 품절 빠른 반환 (서버 2대) | 락 밖 재고 확인 → 즉시 거절 | 0 | 100 | 100 | 약 11.8초 | ✅ (OSIV 켜면 2,000건+ 초과 발급) |
 | v6-3 (서버 2대) | Redisson + AOP `@DistributedLock` | 0 | 100 | 100 | 19.6초 | ✅ 오류 0 |
-| v7-1 (서버 2대) | Redis `DECR`로 재고 판정, DB는 발급 로그 INSERT만 | Redis **-9900** | 100 | 100 | 3.7초 | ⚠️ 정확하지만 재고 음수, INSERT 실패 시 미달 발급 |
-| v7-2 (서버 2대) | Lua(재고 확인 + `DECR` + pending 등록) + 실패 보상 | Redis 0 | 100 | 100 | 2.6초 | ✅ pending 0 |
-| v7-2 + INSERT 10% 강제 실패 | 롤백 경로 검증 | Redis 0 | 100 | 100 | - | ✅ 승인 116 = 성공 100 + 롤백 16 |
+| v7 도입 `DECR` 단독 (서버 2대) | Redis `DECR`로 재고 판정, DB는 발급 로그 INSERT만 | Redis **-9900** | 100 | 100 | 3.7초 | ⚠️ 정확하지만 재고 음수, INSERT 실패 시 미달 발급 |
+| v7-1 (서버 2대) | Lua(재고 확인 + `DECR` + pending 등록) + 실패 보상 | Redis 0 | 100 | 100 | 2.6초 | ✅ pending 0 |
+| v7-1 + INSERT 10% 강제 실패 | 롤백 경로 검증 | Redis 0 | 100 | 100 | - | ✅ 승인 116 = 성공 100 + 롤백 16 |
+| v7-2 1인 1매 (서버 2대, 회원 150) | Lua(재고 확인 → `SADD` issued → `DECR` → pending) | Redis 0 | 100 | 100 | 3.4초 | ✅ 중복 거절 69, 2장 받은 회원 0 |
 
 > v4~ 결과는 재고가 아니라 **발급 로그 수**로 판단합니다. lost update가 나도 재고는 0으로 끝나기 때문입니다.
 
@@ -317,7 +318,7 @@ Mac에서 `localhost:80`으로 보내면 VU 500개가 동시에 연결할 때 Do
 
 > v6까지 Redis는 "락"이었고 재고 판정은 DB에서 했습니다. v7은 **재고 판정 자체를 Redis 원자 연산으로** 옮기고, DB에는 발급 로그만 INSERT합니다.
 
-**v7-1. `DECR`**
+**v7 도입. `DECR` 단독** (코드는 주석으로 유지)
 
 ```java
 Long remain = redisTemplate.opsForValue().decrement("coupon:stock:1");
@@ -331,7 +332,7 @@ return false;
 - 문제 1: 품절 요청도 `DECR` → Redis 재고 **-9900**
 - 문제 2: `DECR` 후 INSERT가 실패하면 재고만 줄고 발급은 안 됨 → **미달 발급**
 
-**v7-2. Lua 스크립트 + 실패 보상**
+**v7-1. Lua 스크립트 + 실패 보상**
 
 ```lua
 -- ISSUE_SCRIPT: 재고 확인 + DECR + pending 등록을 한 번에
@@ -358,10 +359,30 @@ ISSUE_SCRIPT 승인 → INSERT 성공 → ZREM (pending 해제)          → 발
 - 결과: 100건, Redis 재고 0, pending 0, 2.6초
 - 롤백 검증 (INSERT 전 10% 확률 예외): 발급 100, 롤백 16 → **승인 116 = 성공 100 + 롤백 16**
 
+**v7-2. 1인 1매** (`/v7-2/api/issue-user?userId=`)
+
+```lua
+local stock = tonumber(redis.call('GET', KEYS[1]))
+if stock == nil or stock <= 0 then return -1 end                 -- 품절
+if redis.call('SADD', KEYS[3], ARGV[1]) == 0 then return -2 end  -- 중복 (coupon:issued:1)
+local remain = redis.call('DECR', KEYS[1])
+redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1])                     -- pending member = userId
+return remain
+
+-- ROLLBACK_SCRIPT: ZREM == 1이면 SREM issued + INCR (발급 실패한 사람은 재요청 가능)
+```
+
+- pending은 성공 시 지워져 "처리 중"만 막음 → "이미 받은 사람"은 지우지 않는 issued Set으로 따로 관리
+- 거절 조건은 상태 변경 전에 확인. `SADD`는 확인과 등록이 명령 1개라 `SISMEMBER`가 필요 없고, 재고 확인 **뒤**에 둠 (앞이면 품절 요청자도 issued에 등록됨)
+- 응답: 200 `SUCCESS` / 409 `SOLD_OUT`·`DUPLICATE` / 500 `ERROR` (`IssueResult`)
+- 발급 로그에 `user_id` 저장 → pending의 userId와 DB를 대조할 수 있게 됨 (복구 준비)
+- 결과(k6 1만 건, 회원 150 = 인당 약 67회): 발급 100, 중복 69, 품절 9,831, 오류 0. Redis issued 100, DB 회원 100명·2장 받은 회원 0
+- 중복이 69뿐인 이유: 재고 확인이 먼저라 **품절 이후의 중복 요청은 `SOLD_OUT`으로 집계**. 품절 후에도 "이미 받음"을 알려주려면 `SISMEMBER`를 재고 확인 앞에 둠 (명령 1개 증가)
+- 회원 수는 재고보다 많아야 품절 경로까지 검증됨. `USERS` 1000 ≈ 인당 10회, 5000 ≈ 2회
+
 **남은 과제**
 
-- pending 복구: 현재 member가 요청마다 랜덤 UUID라 DB 발급 로그와 대조할 수 없음 → 발급 로그에 `userId` 저장 후 오래된 pending을 대조해 재발급·보상
-- 롤백도 품절과 같은 409로 응답 → 성공/품절/오류 구분
+- pending 복구: 오래된 pending의 userId를 발급 로그와 대조해 재발급·보상
 - DB `coupon_stock` 재고 현행화
 - 큐 기반 비동기 저장
 
@@ -378,9 +399,10 @@ ISSUE_SCRIPT 승인 → INSERT 성공 → ZREM (pending 해제)          → 발
 - [x] 다중 서버 테스트 환경: Docker 앱 2대 + nginx L4 + k6
 - [x] 다중 서버 테스트: v4-2 초과 발급(173건) + 외래키 데드락 재현, v5-1 100건 유지
 - [x] v6: Redis 분산 락 (직접 구현 → Redisson → AOP)
-- [x] v7-1: Redis `DECR`로 재고 판정
-- [x] v7-2: Lua 원자 처리 + INSERT 실패 보상
-- [ ] v7: pending 복구 (사용자 식별자 저장), 결과 3분류, DB 재고 현행화
+- [x] v7 도입: Redis `DECR` 단독 재고 판정
+- [x] v7-1: Lua 원자 처리 + INSERT 실패 보상
+- [x] v7-2: 1인 1매 (issued Set + `SADD`), 결과 분류(성공/품절/중복/오류)
+- [ ] v7: pending 복구, DB 재고 현행화
 - [ ] v7-3: 메시지 큐 기반 비동기 발급
 
 ## 실행 방법
@@ -442,4 +464,15 @@ docker compose run --rm --no-deps -e VERSION=v5-1 \
 # v7 Redis 상태 확인
 docker exec coupon-redis redis-cli GET coupon:stock:1      # 남은 재고
 docker exec coupon-redis redis-cli ZCARD coupon:pending:1  # 결과 미확인 요청 수
+docker exec coupon-redis redis-cli SCARD coupon:issued:1   # 발급받은 회원 수 (v7-2)
+```
+
+```bash
+# v7-2 1인 1매: USERS=회원 수 (user-1~N 랜덤, issue-user API 호출 + result_duplicate 집계)
+curl -s -X POST http://localhost:8081/v7-2/reset -o /dev/null
+docker compose run --rm --no-deps -e VERSION=v7-2 -e USERS=150 k6 run /scripts/issue.js
+
+# 2장 이상 받은 회원 (0행이어야 정상)
+docker exec coupon-mysql mysql -ucoupon -pcoupon coupon -e \
+  "SELECT user_id, COUNT(*) FROM coupon_publish_log GROUP BY user_id HAVING COUNT(*) > 1;"
 ```

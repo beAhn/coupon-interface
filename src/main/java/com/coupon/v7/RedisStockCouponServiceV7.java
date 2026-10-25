@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.UUID;
 
-// v7: 재고 판정을 Redis로 위임 (DB는 발급 로그 + 주기적 재고 현행화)
+// v7-1: 재고 판정을 Redis로 위임, Lua 원자 처리 + INSERT 실패 보상 (DB는 발급 로그 + 주기적 재고 현행화)
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -49,7 +49,7 @@ public class RedisStockCouponServiceV7 implements CouponIssuer {
 
     @Override
     public String version() {
-        return "v7";
+        return "v7-1";
     }
 
     @Override
@@ -57,7 +57,7 @@ public class RedisStockCouponServiceV7 implements CouponIssuer {
         return "DB연동(JPA / Redis 재고 판정)";
     }
 
-    //DECR 원자적 처리로 동시성 보장 후 재고가 0 이상이면 바로 발급 처리
+    //v7 도입(DECR 단독): 재고 음수·미달 발급 문제로 v7-1(Lua)로 대체, 비교용 주석 유지
 //    @Override
 //    public boolean publish() {
 //        Long decrementVal = redisTemplate.opsForValue().decrement(STOCK_KEY);

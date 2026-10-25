@@ -25,7 +25,7 @@ public class CouponServiceV4 implements CouponIssuer {
 
     @Override
     public String description() {
-        return "DB연동(JPA)";
+        return "DB연동(JPA / Synchronized)";
     }
 
     @Transactional

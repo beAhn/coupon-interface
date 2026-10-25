@@ -23,10 +23,18 @@ export const options = {
   },
 };
 
+// 1인 1매(v7-2): USERS=150이면 user-1~150 중 랜덤 userId로 요청
+const USERS = Number(__ENV.USERS || 0);
+const duplicate = new Counter('result_duplicate'); // 409 + DUPLICATE
+
 export default function () {
-  const res = http.post(`${BASE_URL}/${VERSION}/api/issue`);
+  const url = USERS > 0
+    ? `${BASE_URL}/${VERSION}/api/issue-user?userId=user-${Math.floor(Math.random() * USERS) + 1}`
+    : `${BASE_URL}/${VERSION}/api/issue`;
+  const res = http.post(url);
 
   if (res.status === 200) issued.add(1);
+  else if (res.status === 409 && res.body && res.body.includes('DUPLICATE')) duplicate.add(1);
   else if (res.status === 409) soldOut.add(1);
   else error.add(1);
 
