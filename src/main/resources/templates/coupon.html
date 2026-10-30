@@ -38,6 +38,9 @@
         .btn-issue:disabled { background: #d1d5db; cursor: not-allowed; }
         .btn-bulk { margin-top: 8px; background: #111827; color: #fff; }
         .btn-bulk:hover { background: #374151; }
+        .btn-dist { margin-top: 8px; background: #0f766e; color: #fff; }
+        .btn-dist:hover { background: #115e59; }
+        .result .title { font-weight: 600; margin-bottom: 2px; }
         .result { margin-bottom: 16px; padding: 12px; border-radius: 8px; background: #f9fafb; font-size: 14px; text-align: left; line-height: 1.7; }
         .result.broken { background: #fef2f2; color: #b91c1c; }
         .btn-reset { margin-top: 8px; background: transparent; color: #6b7280; font-size: 14px; font-weight: 400; }
@@ -74,11 +77,23 @@
         <div th:if="${issuedCount > initialStock or stock < 0}">⚠️ 초과 발급 발생! (재고 <span th:text="${initialStock}"></span>개 기준)</div>
     </div>
 
+    <div class="result" th:if="${distributedResult}" th:with="r=${distributedResult}"
+         th:classappend="${issuedCount > initialStock or stock < 0 or r.successCount > initialStock or r.errorCount > 0} ? 'broken'">
+        <div class="title">분산 대량 발급 (<span th:text="${r.lbUrl}">http://nginx</span>)</div>
+        <div>요청 <b th:text="${r.requestCount}">0</b> · 성공 <b th:text="${r.successCount}">0</b> · 품절 <b th:text="${r.soldOutCount}">0</b><span th:if="${r.duplicateCount > 0}"> · 중복 <b th:text="${r.duplicateCount}">0</b></span> · 오류 <b th:text="${r.errorCount}">0</b></div>
+        <div>app1 <b th:text="${r.app1Count}">0</b> · app2 <b th:text="${r.app2Count}">0</b> · <span th:text="${r.elapsedMs}">0</span>ms</div>
+        <!-- v1~v3 메모리 재고는 서버마다 따로 → 이 서버 화면은 100이어도 응답 성공 합계로 판단 -->
+        <div th:if="${r.successCount > initialStock or issuedCount > initialStock or stock < 0}">⚠️ 초과 발급 발생! (성공 응답 <span th:text="${r.successCount}"></span>건, 재고 <span th:text="${initialStock}"></span>개 기준)</div>
+    </div>
+
     <form th:action="@{/{v}/issue(v=${version})}" method="post">
         <button class="btn-issue" type="submit" th:disabled="${stock <= 0}">쿠폰 발급</button>
     </form>
     <form th:action="@{/{v}/issue-bulk(v=${version})}" method="post">
-        <button class="btn-bulk" type="submit">전체 발급 (동시 1만 요청)</button>
+        <button class="btn-bulk" type="submit">대량 발급 (서버 1대, 동시 1만 요청)</button>
+    </form>
+    <form th:action="@{/{v}/issue-distributed(v=${version})}" method="post">
+        <button class="btn-dist" type="submit">분산 대량 발급 (nginx → 서버 2대)</button>
     </form>
     <form th:action="@{/{v}/reset(v=${version})}" method="post">
         <button class="btn-reset" type="submit">재고 초기화</button>

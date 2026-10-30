@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 공통 GNB: 큰 버전 탭 + 마우스오버(키보드 포커스) 시 하위 버전 드롭다운. model: gnbGroups(GnbAdvice), version(현재 화면, 홈은 없음) -->
+<nav class="gnb" th:fragment="gnb">
+    <style>
+        .gnb { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 10px 24px; background: #fff; border-bottom: 1px solid #e5e7eb; }
+        .gnb .brand { font-weight: 700; color: #111827; text-decoration: none; white-space: nowrap; }
+        .gnb .menu { display: flex; flex-wrap: wrap; gap: 2px; margin: 0; padding: 0; list-style: none; }
+        .gnb .menu-item { position: relative; }
+        .gnb .major { display: block; padding: 8px 12px; border-radius: 8px; color: #4b5563; font-weight: 600; text-decoration: none; }
+        .gnb .menu-item:hover .major, .gnb .menu-item:focus-within .major { background: #f3f4f6; color: #111827; }
+        .gnb .menu-item.active .major { background: #eef2ff; color: #4338ca; }
+        .gnb .has-sub .major::after { content: " ▾"; font-size: 11px; }
+        .gnb .sub { display: none; position: absolute; top: 100%; left: 0; min-width: 260px; margin: 0; padding: 6px 0 0; list-style: none; }
+        .gnb .menu-item:nth-last-child(-n+2) .sub { left: auto; right: 0; }
+        .gnb .menu-item:hover .sub, .gnb .menu-item:focus-within .sub { display: block; }
+        .gnb .sub-box { padding: 6px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08); }
+        .gnb .sub a { display: flex; gap: 10px; padding: 10px 12px; border-radius: 8px; color: #374151; font-size: 14px; text-decoration: none; }
+        .gnb .sub a:hover, .gnb .sub a:focus-visible { background: #f3f4f6; }
+        .gnb .sub a.on { background: #eef2ff; }
+        .gnb .sub b { min-width: 36px; color: #6366f1; }
+        .gnb a:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
+        @media (max-width: 480px) { .gnb { padding: 10px 16px; } .gnb .major { padding: 8px 9px; } }
+    </style>
+
+    <a class="brand" th:href="@{/}">🎟️ 선착순 쿠폰</a>
+    <ul class="menu">
+        <li class="menu-item" th:each="group : ${gnbGroups}"
+            th:with="subs=${group.value}, latest=${group.value[group.value.size() - 1]}"
+            th:classappend="${(version != null and (version == group.key or #strings.startsWith(version, group.key + '-'))) ? 'active' : ''} + ' ' + ${subs.size() > 1 ? 'has-sub' : ''}">
+            <!-- 큰 버전 클릭 = 최신 하위 버전으로 -->
+            <a class="major" th:href="@{/{v}(v=${latest.version()})}" th:text="${group.key}"
+               th:title="${subs.size() == 1} ? ${latest.description()}">v7</a>
+            <ul class="sub" th:if="${subs.size() > 1}">
+                <li class="sub-box">
+                    <a th:each="issuer : ${subs}" th:href="@{/{v}(v=${issuer.version()})}"
+                       th:classappend="${issuer.version() == version} ? 'on'">
+                        <b th:text="${issuer.version()}">v7-1</b><span th:text="${issuer.description()}">설명</span>
+                    </a>
+                </li>
+            </ul>
+        </li>
+    </ul>
+</nav>
+</body>
+</html>

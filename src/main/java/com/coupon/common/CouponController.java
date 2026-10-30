@@ -2,6 +2,7 @@ package com.coupon.common;
 
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +20,10 @@ public abstract class CouponController {
     @Value("${SERVER_NAME:local}")
     private String serverName;
 
+    // 하위 컨트롤러 생성자를 바꾸지 않도록 필드 주입
+    @Autowired
+    private DistributedIssueSimulator distributedIssueSimulator;
+
     protected CouponController(CouponIssuer issuer, BulkIssueSimulator bulkIssueSimulator) {
         this.issuer = issuer;
         this.bulkIssueSimulator = bulkIssueSimulator;
@@ -26,13 +31,17 @@ public abstract class CouponController {
 
     @GetMapping
     public String page(Model model) {
+        addPageAttributes(model);
+        return "coupon";
+    }
+
+    private void addPageAttributes(Model model) {
         model.addAttribute("version", issuer.version());
         model.addAttribute("description", issuer.description());
         model.addAttribute("stock", issuer.getStock());
         model.addAttribute("issuedCount", issuer.getIssuedCount());
         model.addAttribute("stockPercent", Math.max(0, issuer.getStock()) * 100 / CouponIssuer.INITIAL_STOCK);
         model.addAttribute("initialStock", CouponIssuer.INITIAL_STOCK);
-        return "coupon";
     }
 
     @PostMapping("/issue")
@@ -46,6 +55,21 @@ public abstract class CouponController {
     public String publishBulk(RedirectAttributes redirectAttributes) throws InterruptedException {
         redirectAttributes.addFlashAttribute("bulkResult", bulkIssueSimulator.run(issuer));
         return redirectToPage();
+    }
+
+    // 서버 2대 대량 발급: nginx 경유 HTTP 1만 건
+    // redirect 안 함: flash는 서버별 세션에 저장되는데 L4 nginx라 redirect GET이 다른 서버로 갈 수 있음
+    @PostMapping("/issue-distributed")
+    public String publishDistributed(Model model) throws InterruptedException {
+        model.addAttribute("distributedResult",
+                distributedIssueSimulator.run(issuer.version(), this::distributedIssuePath));
+        addPageAttributes(model);
+        return "coupon";
+    }
+
+    // 분산 대량 발급 시 요청 경로 (요청마다 호출, v7-2는 userId 포함 경로로 재정의)
+    protected String distributedIssuePath() {
+        return "/api/issue";
     }
 
     @PostMapping("/reset")

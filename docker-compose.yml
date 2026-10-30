@@ -43,6 +43,7 @@ services:
       - "8081:8080"   # 디버깅용 직접 접근
     environment:
       SERVER_NAME: app1
+      COUPON_LB_URL: http://nginx   # 분산 대량 발급 시뮬레이터가 부를 주소
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
       SPRING_DATA_REDIS_HOST: redis
       TZ: Asia/Seoul
@@ -59,6 +60,7 @@ services:
       - "8082:8080"
     environment:
       SERVER_NAME: app2
+      COUPON_LB_URL: http://nginx   # 분산 대량 발급 시뮬레이터가 부를 주소
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
       SPRING_DATA_REDIS_HOST: redis
       TZ: Asia/Seoul
