@@ -23,8 +23,10 @@ public class GnbAdvice {
         this.issuers = List.copyOf(byVersion.values());
 
         this.gnbGroups = this.issuers.stream()
-                .collect(Collectors.groupingBy(issuer -> issuer.version().split("-")[0],
-                        LinkedHashMap::new, Collectors.toList()));
+                                     .collect(
+                                             Collectors.groupingBy(issuer -> issuer.version().split("-")[0]
+                                            , LinkedHashMap::new, Collectors.toList())
+                                     );
     }
 
     @ModelAttribute("issuers")

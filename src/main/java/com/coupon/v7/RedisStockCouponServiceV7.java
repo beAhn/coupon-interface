@@ -8,44 +8,33 @@ import com.coupon.domain.repository.CouponStockRepository;
 import com.coupon.v4.CouponServiceV4;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.UUID;
+
+import static com.coupon.v7.CouponRedisKeys.*;
 
 // v7-1: 재고 판정을 Redis로 위임, Lua 원자 처리 + INSERT 실패 보상 (DB는 발급 로그 + 주기적 재고 현행화)
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class RedisStockCouponServiceV7 implements CouponIssuer {
-    private static final String STOCK_KEY = "coupon:stock:1";
-    private static final String PENDING_KEY = "coupon:pending:1";   // Redis 승인 후 DB 미반영 요청
 
     private final CouponServiceV4 couponServiceV4;
     private final StringRedisTemplate redisTemplate;
     private final CouponPublishLogRepository couponPublishLogRepository;
     private final CouponStockRepository couponStockRepository;
 
-    // 재고 확인 + DECR + ZADD를 한 번에 실행 (재고 없으면 -1, 음수로 내려가지 않음)
-    private static final DefaultRedisScript<Long> ISSUE_SCRIPT = new DefaultRedisScript<>(
-            "local stock = tonumber(redis.call('GET', KEYS[1])) " +
-                    "if stock == nil or stock <= 0 then " +
-                    "  return -1 " +
-                    "end " +
-                    "local remain = redis.call('DECR', KEYS[1]) " +
-                    "redis.call('ZADD', KEYS[2], ARGV[2], ARGV[1]) " +
-                    "return remain",
-            Long.class);
+    // 스크립트 본문은 resources/scripts/v7-1 (KEYS·ARGV·반환값 설명도 파일에)
+    // 반환: 남은 재고(>= 0) / -1 품절
+    private static final RedisScript<Long> ISSUE_SCRIPT = RedisScript.of(new ClassPathResource("scripts/v7-1/issue.lua"), Long.class);
 
     // INSERT 실패 시 보상: 대기열에 있을 때만 ZREM + INCR (중복 보상 방지)
-    private static final DefaultRedisScript<Long> ROLLBACK_SCRIPT = new DefaultRedisScript<>(
-            "if redis.call('ZREM', KEYS[2], ARGV[1]) == 1 then " +
-                    "  return redis.call('INCR', KEYS[1]) " +
-                    "end " +
-                    "return -1",
-            Long.class);
+    private static final RedisScript<Long> ROLLBACK_SCRIPT = RedisScript.of(new ClassPathResource("scripts/v7-1/rollback.lua"), Long.class);
 
     @Override
     public String version() {
@@ -80,6 +69,10 @@ public class RedisStockCouponServiceV7 implements CouponIssuer {
         //루아 스크립트로 재고 차감 후 펜딩(발급 여부 체크용)
         Long remain = redisTemplate.execute(ISSUE_SCRIPT, keys, requestId, String.valueOf(System.currentTimeMillis()));
 
+        if (remain == null) {
+            return false;
+        }
+
         //재고가 있을경우 발급, 예외시 롤백, 정상발급시 펜딩키 ZREM
         if (remain >= 0) {
             try {
@@ -93,8 +86,10 @@ public class RedisStockCouponServiceV7 implements CouponIssuer {
             }
 
             redisTemplate.opsForZSet().remove(PENDING_KEY, requestId);
+
             return true;
         }
+
         return false;
     }
 
