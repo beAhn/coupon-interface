@@ -81,6 +81,12 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-aspectj</artifactId>
 		</dependency>
+
+		<!-- v8: Kafka 비동기 발급 (Spring Boot 4부터 spring-kafka 직접 대신 starter, 자동 설정이 모듈로 분리됨) -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka</artifactId>
+		</dependency>
 	</dependencies>
 
 	<build>

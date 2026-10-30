@@ -34,6 +34,35 @@ services:
       timeout: 3s
       retries: 10
 
+  # v8: 발급 메시지 브로커 (KRaft 단일 노드, ZooKeeper 없음)
+  kafka:
+    image: apache/kafka:4.2.1   # kafka-clients 버전(Spring Boot 4.1.1)에 맞춤
+    container_name: coupon-kafka
+    ports:
+      - "9094:9094"   # 로컬(IDE) 실행 앱용 EXTERNAL 리스너
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # INTERNAL = 컨테이너끼리(kafka:9092), EXTERNAL = 호스트에서(localhost:9094)
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # 브로커 1대라 내부 토픽 복제 수 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # 토픽은 직접 생성 (파티션 수를 명시적으로)
+      TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
   # 다중 서버 테스트: 앱 서버 2대 (같은 이미지, SERVER_NAME만 다름)
   app1:
     build: .
@@ -46,11 +75,14 @@ services:
       COUPON_LB_URL: http://nginx   # 분산 대량 발급 시뮬레이터가 부를 주소
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
       SPRING_DATA_REDIS_HOST: redis
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       TZ: Asia/Seoul
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
 
   app2:
@@ -63,11 +95,14 @@ services:
       COUPON_LB_URL: http://nginx   # 분산 대량 발급 시뮬레이터가 부를 주소
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useSSL=false
       SPRING_DATA_REDIS_HOST: redis
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       TZ: Asia/Seoul
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
       app1:
         condition: service_started   # app1이 이미지를 빌드한 뒤 시작

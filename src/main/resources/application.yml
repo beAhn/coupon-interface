@@ -9,6 +9,25 @@ spring:
 #    hikari:
 #      maximum-pool-size: 1
 
+  # v8: 로컬(IDE) 실행은 EXTERNAL 리스너, Docker 앱은 SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092로 덮어씀
+  kafka:
+    bootstrap-servers: localhost:9094
+
+    # key = userId(문자열), value = CouponIssueMessage(JSON)
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      properties:
+        max.block.ms : 3000
+
+
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+      auto-offset-reset: earliest   # 커밋된 offset 없는 첫 기동 시 처음부터 읽음
+      properties:
+        spring.json.trusted.packages: com.coupon.v8   # 이 패키지 클래스로만 역직렬화
+
   jpa:
     hibernate:
       ddl-auto: validate
