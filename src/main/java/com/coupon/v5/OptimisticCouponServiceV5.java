@@ -37,6 +37,9 @@ public class OptimisticCouponServiceV5 implements CouponIssuer {
         boolean isDecreaseSuccess = couponStock.decrease();
 
         if (isDecreaseSuccess) {
+            //UPDATE를 INSERT보다 먼저 실행: X락부터 잡아 FK S락과의 데드락 방지
+            couponStockRepository.flush();
+
             CouponPublishLog couponPublishLog = new CouponPublishLog(couponStock);
             //발급
             couponPublishLogRepository.save(couponPublishLog);

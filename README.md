@@ -19,7 +19,7 @@
 - v4~: Spring Data JPA (Hibernate 7), MySQL 8.0 (Docker Compose), HikariCP
 - 다중 서버 테스트: Docker 앱 컨테이너 2대, nginx 1.27 (L4 `stream` 로드밸런서), k6
 - v6~: Redis 7.4 (v6 분산 락: `SET NX` 스핀 락, Redisson / v7 재고 판정: `DECR`, Lua 스크립트)
-- 예정: 메시지 큐
+- v8~: Kafka 4.2.1 (KRaft 단일 노드), `spring-boot-starter-kafka`
 
 ## 테스트 환경
 
@@ -62,6 +62,19 @@
 | v7-1 (서버 2대) | Lua(재고 확인 + `DECR` + pending 등록) + 실패 보상 | Redis 0 | 100 | 100 | 2.6초 | ✅ pending 0 |
 | v7-1 + INSERT 10% 강제 실패 | 롤백 경로 검증 | Redis 0 | 100 | 100 | - | ✅ 승인 116 = 성공 100 + 롤백 16 |
 | v7-2 1인 1매 (서버 2대, 회원 150) | Lua(재고 확인 → `SADD` issued → `DECR` → pending) | Redis 0 | 100 | 100 | 3.4초 | ✅ 중복 거절 69, 2장 받은 회원 0 |
+| v8-1 (서버 2대, 회원 150) | v7-2 Redis 승인 + Kafka로 DB 반영 비동기화 | Redis 0 | 100 | 100 | 7.1초 | ✅ 중복 63, 오류 0, 응답 직후 DB 72건 → 잠시 후 100건 |
+| v8-2 + 전송 10% 강제 실패 (서버 2대, 회원 150) | pending 재전송 스케줄러 | Redis 0 | 100 | 100 | - | ✅ 강제 실패 10 → pending 10·DB 90 → 재전송 후 pending 0·DB 100, 중복 회원 0 |
+
+**분산 대량 발급 버튼 재측정 (2026-10-31, 서버 2대, v5 3종)**
+
+| 버전 | 성공 | 품절 | 오류 | 시간 | 비고 |
+|---|---|---|---|---|---|
+| v5-1 비관적 락 | 100 | 9,900 | 0 | 151.7초 / 46.8초 | 같은 코드로 편차 큼 |
+| v5-2 낙관적 락 | 100 | 8,163 | 1,737 | 93초 | 데드락 1,629 + version 충돌 108 |
+| v5-2 + `flush()` | 100 | - | 1,489 | - | 데드락 0, 전부 version 충돌 |
+| v5-3 조건부 UPDATE | 100 | 9,900 | 0 | 61.8초 | 데드락 0 |
+
+> 이 표의 시간은 호스트 메모리 부족(스왑 약 16~17GB)이 겹쳐 우열 비교에 쓰지 않습니다. 정확성과 실패 원인만 비교합니다.
 
 > v4~ 결과는 재고가 아니라 **발급 로그 수**로 판단합니다. lost update가 나도 재고는 0으로 끝나기 때문입니다.
 
@@ -304,19 +317,50 @@ UPDATE = 49, commit            UPDATE = 49, commit   → 발급 2건, 재고 1 �
 - 시간도 워밍업 후 7.3~8.7초로 v5-1(4.0초)보다 약 2배 느림 (서버 1대 시뮬레이터에선 v5-2가 더 빨랐음). 재고가 남은 초반에 데드락·롤백으로 느리고, 품절 이후엔 쓰기가 없어 빠름. 비관적 락은 반대로 품절 이후에도 `FOR UPDATE`로 한 줄
 - 결론: 정확성은 지키지만, 한 행에 요청이 몰리면 롤백 비용이 큼. 재시도를 넣는다면 데드락(`CannotAcquireLockException`)도 대상에 포함해야 함
 
+- 발생 조건: FK로 부모 행을 참조하는 자식 INSERT 후 같은 부모 행을 UPDATE하는 트랜잭션이 같은 행에 동시에 몰릴 때
+
+**v5-2에 `flush()` 추가: UPDATE를 INSERT보다 먼저**
+
+```java
+if (couponStock.decrease()) {
+    couponStockRepository.flush();   // UPDATE 먼저 → X 락 획득
+    couponPublishLogRepository.save(new CouponPublishLog(couponStock));
+    return true;
+}
+```
+
+- X 락을 먼저 잡아 S→X 경로가 없어짐 → INSERT의 S 락은 이미 가진 X 락으로 충족, 뒤 트랜잭션은 X 락 대기 후 version 불일치로 0행
+- 데드락 1,629 → **0**, version 충돌 108 → **1,489**. 실패 원인만 바뀌고 재시도가 없으면 요청은 여전히 실패
+
+**v5-3. 조건부 UPDATE**
+
+```java
+@Modifying
+@Query("update CouponStock c set c.stockQuantity = c.stockQuantity - 1 where c.id = :id and c.stockQuantity > 0")
+int updateCouponStockByConditionalUpdate(@Param("id") Long id);   // 1 성공, 0 품절
+```
+
+- 재고 확인과 차감을 쿼리 하나로 처리. 재고 엔티티를 조회하지 않고, 성공 시 `getReferenceById` 프록시로 FK 값만 채워 INSERT
+- 비교 후 변경은 CAS와 닮았지만 경합 시 실패·재시도가 아니라 **행 X 락 대기 후 최신 값으로 재평가** → 재고가 0일 때만 실패 (v5-2의 `WHERE version = ?`는 재고가 남아도 실패)
+- UPDATE가 먼저라 FK S→X 데드락 경로가 없음. 서버 2대 100건, 오류·데드락 0
+- 품절 요청도 UPDATE로 X 락을 거침 (app1 요청 4,958건 = `update` 로그 4,958건) → DB 병목은 남음
+- JPQL 벌크 연산은 더티 체킹을 거치지 않아 `@Version`이 오르지 않음 (재고 100 차감에 version 변화 없음). 같은 행에 낙관적 락과 섞으면 낙관적 락이 이 변경을 감지하지 못함
+
 **k6는 Docker 네트워크 안에서 실행**
 
 Mac에서 `localhost:80`으로 보내면 VU 500개가 동시에 연결할 때 Docker Desktop 포트 포워딩 구간에서 `connection reset by peer`가 발생했습니다 (v5-1에서 350건, 앱 로그에는 예외 없음). 같은 테스트를 Docker 네트워크 안에서 실행하면 0건입니다. 그래서 k6를 compose 서비스(`profiles: ["test"]`)로 두고 `docker compose run`으로 실행합니다.
 
 **측정 시 주의**
 
-- 코드를 바꾸면 `./mvnw package` → `docker compose up -d --build` → `docker compose restart nginx`. IntelliJ 실행은 Mac의 별도 앱이라 컨테이너에 반영되지 않음
+- 코드를 바꾸면 `./mvnw clean package` (`clean` 없으면 옛 jar가 남을 수 있음) → `docker compose up -d --build` → `docker compose restart nginx`. IntelliJ 실행은 Mac의 별도 앱이라 컨테이너에 반영되지 않음
 - 같은 조건으로 3회 이상, 첫 회는 워밍업으로 제외 (v5-1이 7.3초 → 워밍업 후 4.0초)
 - k6 `http_req_failed`는 200~399 밖을 모두 실패로 셈 → 409 품절도 포함 (v5-1 정상이 99%)
 
 ### v7. Redis 재고 판정
 
 > v6까지 Redis는 "락"이었고 재고 판정은 DB에서 했습니다. v7은 **재고 판정 자체를 Redis 원자 연산으로** 옮기고, DB에는 발급 로그만 INSERT합니다.
+>
+> Lua 본문은 `src/main/resources/scripts/v7-1`, `v7-2`의 `.lua` 파일에 있고, 키는 `CouponRedisKeys`에 모았습니다. v7-1·v7-2·v8-1·v8-2는 같은 Redis 키를 공유하므로 한 번에 한 버전씩 테스트합니다. v8-2 스케줄러는 어떤 버전을 테스트하든 항상 돌기 때문에, 다른 버전에서 40초 넘게 남은 pending도 Kafka로 재전송합니다.
 
 **v7 도입. `DECR` 단독** (코드는 주석으로 유지)
 
@@ -384,7 +428,50 @@ return remain
 
 - pending 복구: 오래된 pending의 userId를 발급 로그와 대조해 재발급·보상
 - DB `coupon_stock` 재고 현행화
-- 큐 기반 비동기 저장
+
+### v8. Kafka 비동기 발급
+
+> 동시성 판정은 v7-2 Redis Lua가 그대로 맡고, **확정된 발급을 DB에 기록하는 일을 Kafka로 넘깁니다.** 주제가 동시성에서 비동기 처리 신뢰성으로 바뀌어 v8로 분리했습니다.
+
+```
+요청 스레드(프로듀서)                     컨슈머 (app1·app2, concurrency 2)
+Redis Lua 승인 → send(topic, userId, msg)
+              → get(3초) 브로커 ack        → INSERT 발급 로그
+              → 200 SUCCESS                → ZREM pending
+```
+
+**v8-1. 기본 흐름** (`/v8-1/api/issue-user?userId=`)
+
+- SUCCESS의 의미: 발급 확정, DB 반영 대기. 응답 직후 화면 발급 수 72 → 잠시 후 100 (최종적 일관성)
+- 메시지 키 = `userId`: 같은 유저의 이벤트 순서 보장 + 파티션 분산. 중복 요청은 Redis `SADD`가, 같은 메시지 재수신은 컨슈머 멱등 처리가 담당
+- `send()`는 빈 `CompletableFuture`를 바로 반환 → 응답에 전송 결과를 반영하려고 `get(3초)`로 대기. 실패하면 `rollback.lua`로 보상 후 500
+- `send()` 자체가 메타데이터 대기로 막힐 수 있어 `max.block.ms` 3000으로 축소. `get` 타임아웃은 전송 취소가 아님 → 보상 후 늦게 전송되는 불일치는 v8-2 과제
+- 토픽 `coupon-issue`: 파티션 3, 복제 수 1. 컨슈머 4개 중 3개가 파티션을 맡고 1개는 대기
+- 결과: 요청 1만, 성공 100, 품절 9,837, 중복 63, 오류 0. 파티션별 메시지 29 / 34 / 37, LAG 0. Redis 재고 0, pending 0, issued 100, DB 100건
+
+**v8-2. pending 재전송** (`/v8-2/api/issue-user?userId=`)
+
+v8-1은 전송이 실패하면 즉시 보상해 고객이 자리를 잃습니다. v8-2는 **승인을 유지하고, 전송되지 않은 건을 스케줄러가 다시 보냅니다.**
+
+```
+요청 스레드: Redis Lua 승인(pending 등록) → send 실패 → 로그만 남기고 200 SUCCESS
+스케줄러(5초 주기, 락을 얻은 1대): 40초 지난 pending 조회 → send → score를 현재 시각으로 갱신
+컨슈머: INSERT → ZREM pending (UNIQUE 위반이면 이미 처리된 건으로 보고 ZREM)
+```
+
+- pending을 지우는 곳은 컨슈머뿐: 전송 성공이 아니라 DB 반영까지 끝나야 완료
+- score 갱신: 갱신하지 않으면 40초가 지난 건을 5초마다 다시 보내 장애 중 토픽에 중복 메시지가 쌓임. 갱신하면 같은 건은 40초마다 전송. 이때 score는 승인 시각이 아니라 마지막 전송 시도 시각
+- `send()` 실패 2종: 호출 중 즉시 실패(`max.block.ms` 초과 등)는 `catch`에서 로그 후 `break`, 남은 건은 다음 주기로. 반환 후 실패는 `whenComplete`에서 로그
+- 스케줄러 중복 실행 방지: Redisson `tryLock()`을 대기 없이 시도, 실패하면 이번 주기를 건너뜀. 서버가 죽으면 watchdog 만료 후 다른 서버가 이어받음
+- 락이 있어도 메시지 중복은 가능(전송 후 score 갱신 전 서버 사망 등) → 멱등성은 `UNIQUE (coupon_stock_id, user_id)`가 담당
+- 결과(전송 10% 강제 실패, 서버 2대 분산 버튼): 강제 실패 10(app1 4, app2 6) → 중간 확인 pending 10·DB 90 → 재전송 후 pending 0·DB 100, 회원 100명, Redis 재고 0, issued 100, LAG 0
+
+**남은 과제**
+
+- v8-2 추가 실패 시나리오: Kafka 중단·복구, MySQL 중단·복구(중복 수신과 UNIQUE 처리는 아직 실험으로 확인하지 못함)
+- v8-3: 컨슈머 INSERT 실패 재시도·DLQ
+- 토픽 자동 생성(`NewTopic`), reset 후 토픽 잔여 메시지 처리
+- Kafka 장애 실험: 브로커 3대, 복제 3, `acks=all`, `min.insync.replicas=2`
 
 ## 로드맵
 
@@ -403,32 +490,41 @@ return remain
 - [x] v7-1: Lua 원자 처리 + INSERT 실패 보상
 - [x] v7-2: 1인 1매 (issued Set + `SADD`), 결과 분류(성공/품절/중복/오류)
 - [ ] v7: pending 복구, DB 재고 현행화
-- [ ] v7-3: 메시지 큐 기반 비동기 발급
-- [ ] 화면에서 서버 2대 대량 발급 (nginx 경유 시뮬레이터)
+- [x] 화면에서 서버 2대 대량 발급 (nginx 경유 시뮬레이터)
+- [x] v7 리팩토링: Lua 파일 분리, `IssueResult.from`, `CouponRedisKeys`
+- [x] v8-1: Kafka 비동기 발급 (Redis 승인 → 컨슈머 DB 반영)
+- [x] v8-2: 전송 실패 재전송 (pending 스케줄러, Redisson 락, UNIQUE 멱등), 10% 강제 실패 검증
+- [ ] v8-2: Kafka·MySQL 중단 시나리오 검증
+- [ ] v8-3: 컨슈머 실패 재시도·DLQ
+- [ ] 클라우드 환경에서 수치 측정
 
 ## 실행 방법
 
 **서버 1대 (IntelliJ 또는 Maven)**
 
 ```bash
-docker compose up -d mysql     # MySQL (v4~)
+docker compose up -d mysql redis kafka     # MySQL (v4~), Redis (v6~), Kafka (v8~)
 ./mvnw spring-boot:run
 ```
 
 - `http://localhost:8080` 접속 → 상단 GNB에서 버전 선택 (큰 버전 탭, 마우스오버 시 하위 버전 드롭다운, 큰 버전 클릭은 최신 하위 버전으로)
-- 각 버전 화면(`/v1` ~ `/v7-2`)에서 단건 발급, 대량 발급(1만 건, 서버 1대), 초기화 실행
+- 각 버전 화면(`/v1` ~ `/v8-2`)에서 단건 발급, 대량 발급(1만 건, 서버 1대), 분산 대량 발급(nginx 경유, 서버 2대), 초기화 실행
+- IDE 앱도 Kafka 컨슈머 그룹에 합류하므로, app1·app2 파티션 배정을 관찰할 때는 IDE 앱을 끄거나 `http://localhost`에서 버튼을 누름
 - 기동 완료 시 전 버전 자동 초기화 (DB 재고 100·발급 로그 삭제·Redis 키 정리). DB/Redis는 서버 2대 공유라 한 대만 재시작해도 초기화됨 → 끄려면 `coupon.reset-on-startup=false` (Docker: `COUPON_RESET_ON_STARTUP=false`)
 - `ddl-auto: validate`라 테이블은 직접 준비해야 함. v5-2부터 `coupon_stock.version` 컬럼 필요
 
 ```sql
 ALTER TABLE coupon_stock ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
+
+-- v8-2: 같은 쿠폰을 같은 회원에게 한 건만 기록 (재전송 중복 방지, user_id NULL은 대상 아님)
+ALTER TABLE coupon_publish_log ADD CONSTRAINT uk_coupon_publish_log_stock_user UNIQUE (coupon_stock_id, user_id);
 ```
 
 **서버 2대 (다중 서버 테스트)**
 
 ```bash
-./mvnw package -Dmaven.test.skip=true    # JDK 21 필요
-docker compose up -d --build              # mysql + app1 + app2 + nginx
+./mvnw clean package -Dmaven.test.skip=true    # JDK 21 필요
+docker compose up -d --build              # mysql + redis + kafka + app1 + app2 + nginx
 docker compose restart nginx              # 앱 컨테이너를 다시 만든 경우 (nginx는 시작 시에만 IP 조회)
 ```
 
@@ -437,6 +533,14 @@ docker compose restart nginx              # 앱 컨테이너를 다시 만든 �
 | `http://localhost` | nginx → app1 / app2 분산 |
 | `http://localhost:8081` | app1 직접 |
 | `http://localhost:8082` | app2 직접 |
+
+```bash
+# v8 토픽 생성 (자동 생성 off, Kafka 컨테이너를 새로 만들면 다시 필요)
+docker exec coupon-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server 127.0.0.1:9092 --create --topic coupon-issue --partitions 3 --replication-factor 1
+
+# 컨슈머 그룹 배정·LAG 확인
+docker exec coupon-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:9092 --describe --group coupon-issue-consumer
+```
 
 ```bash
 # 발급 API (nginx 경유)
