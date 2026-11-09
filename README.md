@@ -465,10 +465,11 @@ v8-1은 전송이 실패하면 즉시 보상해 고객이 자리를 잃습니다
 - 스케줄러 중복 실행 방지: Redisson `tryLock()`을 대기 없이 시도, 실패하면 이번 주기를 건너뜀. 서버가 죽으면 watchdog 만료 후 다른 서버가 이어받음
 - 락이 있어도 메시지 중복은 가능(전송 후 score 갱신 전 서버 사망 등) → 멱등성은 `UNIQUE (coupon_stock_id, user_id)`가 담당
 - 결과(전송 10% 강제 실패, 서버 2대 분산 버튼): 강제 실패 10(app1 4, app2 6) → 중간 확인 pending 10·DB 90 → 재전송 후 pending 0·DB 100, 회원 100명, Redis 재고 0, issued 100, LAG 0
+- 결과(MySQL 약 5분 50초 중단, 발급 6건): 요청은 모두 200, 재전송 40초 간격 8회로 메시지 54건(최초 6 + 재전송 48). 파티션마다 첫 메시지는 약 5분 뒤 건너뛰어 3건 제외. 복구 후 나머지 51건 = INSERT 6 + UNIQUE 위반 45, 최종 pending 0·DB 6·중복 0, LAG 0
 
 **남은 과제**
 
-- v8-2 추가 실패 시나리오: Kafka 중단·복구, MySQL 중단·복구(중복 수신과 UNIQUE 처리는 아직 실험으로 확인하지 못함)
+- v8-2 추가 실패 시나리오: Kafka 중단·복구
 - v8-3: 컨슈머 INSERT 실패 재시도·DLQ
 - 토픽 자동 생성(`NewTopic`), reset 후 토픽 잔여 메시지 처리
 - Kafka 장애 실험: 브로커 3대, 복제 3, `acks=all`, `min.insync.replicas=2`
@@ -494,7 +495,8 @@ v8-1은 전송이 실패하면 즉시 보상해 고객이 자리를 잃습니다
 - [x] v7 리팩토링: Lua 파일 분리, `IssueResult.from`, `CouponRedisKeys`
 - [x] v8-1: Kafka 비동기 발급 (Redis 승인 → 컨슈머 DB 반영)
 - [x] v8-2: 전송 실패 재전송 (pending 스케줄러, Redisson 락, UNIQUE 멱등), 10% 강제 실패 검증
-- [ ] v8-2: Kafka·MySQL 중단 시나리오 검증
+- [x] v8-2: MySQL 중단 시나리오 검증
+- [ ] v8-2: Kafka 중단 시나리오 검증
 - [ ] v8-3: 컨슈머 실패 재시도·DLQ
 - [ ] 클라우드 환경에서 수치 측정
 

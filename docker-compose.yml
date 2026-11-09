@@ -34,6 +34,21 @@ services:
       timeout: 3s
       retries: 10
 
+  # Redis GUI (http://localhost:5540, 연결 주소 redis:6379)
+  redisinsight:
+    image: redis/redisinsight:2.70
+    container_name: coupon-redisinsight
+    ports:
+      - "5540:5540"
+    environment:
+      # 기동 시 redis 연결 자동 등록 + 약관 화면 생략
+      RI_REDIS_HOST: redis
+      RI_REDIS_PORT: 6379
+      RI_REDIS_ALIAS: coupon-redis
+      RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
+    depends_on:
+      - redis
+
   # v8: 발급 메시지 브로커 (KRaft 단일 노드, ZooKeeper 없음)
   kafka:
     image: apache/kafka:4.2.1   # kafka-clients 버전(Spring Boot 4.1.1)에 맞춤

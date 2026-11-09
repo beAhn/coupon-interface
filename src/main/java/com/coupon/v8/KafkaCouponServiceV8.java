@@ -30,6 +30,8 @@ public class KafkaCouponServiceV8 implements CouponIssuer {
     private final KafkaTemplate<String, CouponIssueMessage> kafkaTemplate;
 
     public static final String TOPIC = "coupon-issue";   // 컨슈머 @KafkaListener도 사용
+    public static final String TOPIC_DLT = "coupon-issue-dlt";   // 컨슈머 @KafkaListener도 사용(DLT)
+
     private static final long SEND_TIMEOUT_SECONDS = 3;  // 브로커 다운 시 요청 스레드 최대 대기
 
     // v7-2 스크립트 재사용 (반환: 남은 재고(>= 0) / -1 품절 / -2 중복)
