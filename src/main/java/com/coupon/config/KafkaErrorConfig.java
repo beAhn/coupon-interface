@@ -14,7 +14,7 @@ public class KafkaErrorConfig {
     @Bean
     public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, CouponIssueMessage> kafkaTemplate) {
         DeadLetterPublishingRecoverer deadLetterPublishingRecoverer = new DeadLetterPublishingRecoverer(kafkaTemplate);
-        FixedBackOff fixedBackOff = new FixedBackOff(30000L, 3);
+        FixedBackOff fixedBackOff = new FixedBackOff(30000L, 3); //30초간격 3회 재시도
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(deadLetterPublishingRecoverer, fixedBackOff);
 
         // 재시도해도 결과가 같은 예외는 바로 DLT

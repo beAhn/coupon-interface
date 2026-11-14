@@ -29,7 +29,7 @@ public class RedissonLockCouponServiceV6 implements CouponIssuer {
 
     @Override
     public String description() {
-        return "DB연동(JPA / Redis 분산 락 + 프록시 패턴)";
+        return "DB연동(JPA / Redisson RLock)";
     }
 
     // 락 획득 → 트랜잭션(커밋까지) → 락 해제 순서라 커밋 전 해제 문제 없음

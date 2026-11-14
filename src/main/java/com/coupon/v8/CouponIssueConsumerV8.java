@@ -26,9 +26,9 @@ public class CouponIssueConsumerV8 {
     @KafkaListener(topics = KafkaCouponServiceV8.TOPIC, groupId = "coupon-issue-consumer", concurrency = "2")
     public void consume(CouponIssueMessage message) {
         //카프카 컨슈머 처리 오류 테스트용
-        if (message.userId().startsWith("bad-")) {
-            throw new IllegalArgumentException("잘못된 userId: " + message.userId());
-        }
+//        if (message.userId().startsWith("bad-")) {
+//            throw new IllegalArgumentException("잘못된 userId: " + message.userId());
+//        }
 
         try {
             CouponStock couponStock = couponStockRepository.getReferenceById(1L);
