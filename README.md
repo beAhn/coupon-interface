@@ -11,6 +11,36 @@
 - 멀티스레드 동시성 제어 방식별 트레이드오프 비교 (정확성 vs 처리량)
 - 단일 서버 → 다중 서버 분산 환경으로 단계적 확장
 
+## 버전 지도
+
+오랜만에 볼 때 여기부터. 코드는 `src/main/java/com/coupon/{버전}`, 화면은 `http://localhost/{경로}`.
+
+| 버전 | 경로 | 핵심 클래스 | 한 줄 요약 | 다음 단계로 간 이유 |
+|---|---|---|---|---|
+| v1 | `/v1` | `CouponServiceV1` | 동기화 없이 `int` 재고 → 초과 발급 재현 | 경쟁 조건을 막을 도구 필요 |
+| v2 | `/v2` | `CouponServiceV2` | Atomic, `synchronized` 범위 비교 (코드는 최종본 v2-3만) | Atomic은 연산 1개만 보호, 락은 느림 → 락 없는 방법 |
+| v3 | `/v3` | `CouponServiceV3` | CAS(`compareAndSet`)로 락 없이 해결 | 메모리 재고라 서버 재시작·다중 서버 불가 → DB |
+| v4-1 | (화면 없음) | `CouponServiceV4` | JPA + `@Transactional`만 → 202건 초과 발급 | 트랜잭션은 동시성 제어가 아님 |
+| v4-2 | `/v4` | `ProxyCouponServiceV4` → `CouponServiceV4` | 트랜잭션 바깥 빈에서 `synchronized` (커밋 후 락 해제) | JVM 락은 서버 2대에서 쪼개짐(173건) → DB 락 |
+| v5-1 | `/v5-1` | `PessimisticCouponServiceV5` | `SELECT ... FOR UPDATE` 비관적 락 | 대기 중 커넥션 점유, 품절 후에도 락 대기 |
+| v5-2 | `/v5-2` | `OptimisticCouponServiceV5` | `@Version` 낙관적 락 (재시도 없음) | 핫 로우에서 충돌·FK 데드락 다수 |
+| v5-3 | `/v5-3` | `ConditionalUpdateCouponServiceV5` | `UPDATE ... WHERE stock > 0` 쿼리 하나 | 여전히 DB 행 락 직렬 → 대기를 DB 밖으로 |
+| v6-1 | `/v6` | `RedisLockCouponServiceV6` | Redis `SET NX` 스핀 락 + Lua 해제, 품절 빠른 반환 | 폴링 부하·기아, TTL 선택 어려움 |
+| v6-2 | `/v6-2` | `RedissonLockCouponServiceV6`, `RedissonConfig` | Redisson (pub/sub 대기, watchdog) | 락 코드가 비즈니스에 섞임 |
+| v6-3 | `/v6-3` | `AopRedissonLockPublisherV6`, `aop/*` | `@DistributedLock` AOP, `REQUIRES_NEW`로 커밋 후 해제 | 판정은 여전히 DB라 직렬 병목 → 판정을 Redis로 |
+| v7-1 | `/v7-1` | `RedisStockCouponServiceV7`, `scripts/v7-1/*.lua` | Lua로 재고 확인+차감 원자 처리, DB는 로그 INSERT만, 실패 시 보상 | 1인 1매 조건 없음 |
+| v7-2 | `/v7-2` | `OnePerUserCouponServiceV7`, `scripts/v7-2/*.lua` | 1인 1매 (`SADD issued`), 결과 분류 | 요청 경로에 DB INSERT가 남음 → 비동기 |
+| v8-1 | `/v8-1` | `KafkaCouponServiceV8`, `CouponIssueConsumerV8` | Redis 승인 → Kafka → 컨슈머가 DB INSERT | 전송 실패 시 즉시 롤백 → 고객이 자리를 잃음 |
+| v8-2 | `/v8-2` | `KafkaRetryCouponServiceV8`, `CouponPendingRetrySchedulerV8` | 전송 실패해도 성공 응답, pending 40초 지나면 재전송, UNIQUE 멱등 | 컨슈머가 계속 실패하는 메시지 처리 없음 |
+| v8-3 | `/v8-2` (그대로) | `KafkaErrorConfig`, `CouponIssueDltConsumerV8` | 재시도 3회 → DLT → Redis 롤백 | DLT 롤백과 재전송이 어긋남 → 개선 방향만 기록(종료) |
+
+**공통**
+- `common/CouponController`: 버전별 컨트롤러의 부모 (발급, 대량 발급, 분산 대량 발급, 초기화)
+- `common/CouponIssuer`: 버전마다 구현하는 인터페이스 (`publish`, `reset`, `version`)
+- `common/DistributedIssueSimulator`: nginx 경유 1만 건, 서버별·결과별 집계
+- `domain/`: 공용 엔티티·리포지토리. `CouponStock`의 `@Version`은 v5-2용이지만 모든 버전에 적용됨 (주의)
+- `v7/CouponRedisKeys`: v7-1, v7-2, v8이 같은 Redis 키 공유 → 한 번에 한 버전씩 테스트
+
 ## 기술 스택
 
 - Java 21, Spring Boot 4.1.1, Maven
